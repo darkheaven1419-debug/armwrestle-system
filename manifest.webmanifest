@@ -1,0 +1,20 @@
+{
+  "name": "世界华人腕力协会比赛系统",
+  "short_name": "腕力比赛",
+  "description": "世界华人腕力协会比赛系统（开发者：张梓桐）",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

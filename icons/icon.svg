@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6ea8fe"/>
+      <stop offset="1" stop-color="#40c057"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="30%" cy="25%" r="80%">
+      <stop offset="0" stop-color="#16224a"/>
+      <stop offset="1" stop-color="#0b1020"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="58" y="58" width="396" height="396" rx="98" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+  <path d="M140 330c22-62 64-98 126-108 60-10 118 10 158 52" fill="none" stroke="url(#g)" stroke-width="22" stroke-linecap="round"/>
+  <path d="M170 318c18-42 48-66 92-74 46-8 90 6 120 34" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="10" stroke-linecap="round"/>
+  <text x="256" y="215" text-anchor="middle" font-family="system-ui,Segoe UI,Arial" font-size="56" fill="rgba(255,255,255,0.92)" font-weight="750">U›</text>
+  <text x="256" y="265" text-anchor="middle" font-family="system-ui,Segoe UI,Arial" font-size="22" fill="rgba(255,255,255,0.70)">Ô[ûß</text>
+</svg>
+
