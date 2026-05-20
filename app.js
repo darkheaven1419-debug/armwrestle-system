@@ -18,7 +18,7 @@ const W = window.WACAA || {};
       l.tables ||= [];
       l.history ||= [];
       l.undoStack ||= [];
-      l.banners ||= { top8Shown: false, top4Shown: false, gfShown: false };
+      l.banners ||= { top8Shown: false, top3Shown: false, gfShown: false };
       if (l.maxTables == null) l.maxTables = 3;
     }
   }

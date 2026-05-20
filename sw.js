@@ -1,7 +1,7 @@
 /* Service Worker: PWA offline cache */
 /* global self */
 
-const CACHE_NAME = 'wacaa-pwa-v2';
+const CACHE_NAME = 'wacaa-pwa-v3-' + Date.now();
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -30,7 +30,11 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.map((k) => (k === CACHE_NAME ? null : caches.delete(k))));
+      // 清除所有旧版本缓存
+      await Promise.all(keys
+        .filter((k) => k.startsWith('wacaa-pwa-') && k !== CACHE_NAME)
+        .map((k) => caches.delete(k))
+      );
       await self.clients.claim();
     })()
   );
@@ -42,7 +46,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     (async () => {
-      const cached = await caches.match(req, { ignoreSearch: true });
+      const cached = await caches.match(req);
       if (cached) return cached;
       try {
         const res = await fetch(req);

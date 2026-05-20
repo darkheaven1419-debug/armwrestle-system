@@ -52,5 +52,12 @@
     return window.pinyinPro.pinyin(n, { toneType: 'symbol', type: 'array' }).join(' ');
   };
 
+  // N9: 名字长度限制
+  W.truncateName = function truncateName(name, maxLen) {
+    maxLen = maxLen || 30;
+    const s = (name || '').trim();
+    return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
+  };
+
   window.WACAA = W;
 })();

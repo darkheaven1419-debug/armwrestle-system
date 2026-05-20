@@ -4,10 +4,6 @@
   const W = window.WACAA || {};
   const { uid, now, deepClone, shuffle } = W;
 
-  const computeTableCount = () => W.computeTableCount;
-  const alivePlayers = () => W.alivePlayers;
-  const bracketPlayers = () => W.bracketPlayers;
-
   /* ---- 参与者占用追踪 ---- */
   W.participantsInUse = function participantsInUse(level) {
     const used = new Set();
@@ -27,6 +23,10 @@
   W.generateMatchesIfNeeded = function generateMatchesIfNeeded(level) {
     const events = [];
     if (!level.started || level.finished) return events;
+
+    // C5: 先清理僵尸对阵（选手已淘汰但对阵还在）
+    cleanupPendingMatches(level);
+
     W.adjustTablesToAutoCount(level, events);
     if (level.grandFinal && !level.grandFinal.completed) return events;
     const alive = W.alivePlayers(level);
@@ -39,12 +39,15 @@
       return events;
     }
     if (!hasPendingForBracket(level, 'W')) {
-      const created = createBracketPairings(level, 'W');
-      if (created > 0) events.push({ type: 'matchesGenerated', bracket: 'W', count: created });
+      const result = createBracketPairings(level, 'W');
+      if (result.created > 0) events.push({ type: 'matchesGenerated', bracket: 'W', count: result.created });
+      // M1: 轮空通知
+      if (result.byeName) events.push({ type: 'bye', name: result.byeName });
     }
     if (!hasPendingForBracket(level, 'L')) {
-      const created = createBracketPairings(level, 'L');
-      if (created > 0) events.push({ type: 'matchesGenerated', bracket: 'L', count: created });
+      const result = createBracketPairings(level, 'L');
+      if (result.created > 0) events.push({ type: 'matchesGenerated', bracket: 'L', count: result.created });
+      if (result.byeName) events.push({ type: 'bye', name: result.byeName });
     }
     return events;
   };
@@ -52,11 +55,13 @@
   function createBracketPairings(level, bracket) {
     const used = W.participantsInUse(level);
     const candidates = W.bracketPlayers(level, bracket).map((p) => p.id).filter((id) => !used.has(id));
-    if (candidates.length < 2) return 0;
+    let byeName = null;
+    if (candidates.length < 2) return { created: 0, byeName: null };
     const pool = shuffle(candidates);
     if (pool.length % 2 === 1) {
       const byeIdx = Math.floor(Math.random() * pool.length);
-      pool.splice(byeIdx, 1);
+      const byeId = pool.splice(byeIdx, 1)[0];
+      byeName = level.players[byeId]?.name || null;
     }
     let created = 0;
     for (let i = 0; i < pool.length; i += 2) {
@@ -65,7 +70,7 @@
       level.pendingMatches.push({ id: uid(), createdAt: now(), bracket, p1, p2, tableNo: null });
       created++;
     }
-    return created;
+    return { created, byeName };
   }
 
   W.adjustTablesToAutoCount = function adjustTablesToAutoCount(level, eventsOut) {
@@ -163,15 +168,18 @@
     p.eliminatedAt = now();
   };
 
+  // M2: 也处理 0 存活的情况
   W.finalizeIfDone = function finalizeIfDone(level) {
     if (level.grandFinal?.completed) { level.finished = true; return; }
-    if (W.alivePlayers(level).length === 1 && level.started) { level.finished = true; }
+    const alive = W.alivePlayers(level).length;
+    if (alive <= 1 && level.started) { level.finished = true; }
   };
 
   function maybeStageEvent(level) {
     const alive = W.alivePlayers(level).length;
     if (!level.banners.top8Shown && alive <= 8) { level.banners.top8Shown = true; return { type: 'stage', stage: 'top8' }; }
-    if (!level.banners.top4Shown && alive <= 3) { level.banners.top4Shown = true; return { type: 'stage', stage: 'top3' }; }
+    // M3: 变量名修正
+    if (!level.banners.top3Shown && alive <= 3) { level.banners.top3Shown = true; return { type: 'stage', stage: 'top3' }; }
     return null;
   }
 
@@ -191,6 +199,30 @@
     return { type: 'gfPoint' };
   };
 
+  // N3: 总决赛撤回上一局
+  W.undoGrandFinalPoint = function undoGrandFinalPoint(level) {
+    const gf = level.grandFinal;
+    if (!gf || gf.completed) return null;
+    // 找到最近一次 grandFinal 相关的快照
+    for (let i = level.undoStack.length - 1; i >= 0; i--) {
+      const u = level.undoStack[i];
+      if (u.scope === 'global') {
+        // 查快照中 grandFinal 的分数：如果比当前少，就恢复
+        const snap = u.snapshot;
+        if (snap.grandFinal && !snap.grandFinal.completed) {
+          const oldWins1 = snap.grandFinal.wins1 || 0;
+          const oldWins2 = snap.grandFinal.wins2 || 0;
+          if (oldWins1 < gf.wins1 || oldWins2 < gf.wins2) {
+            level.undoStack.splice(i, 1);
+            restoreSnapshot(level, snap);
+            return '已撤销总决赛上一局';
+          }
+        }
+      }
+    }
+    return null;
+  };
+
   function finishGrandFinal(level, winnerId, runnerUpId) {
     level.grandFinal.completed = true; level.grandFinal.winnerId = winnerId; level.grandFinal.runnerUpId = runnerUpId;
     const r = level.players[runnerUpId];
@@ -203,7 +235,8 @@
     const events = [];
     if (Object.keys(level.players).length < 2) return events;
     level.started = true; level.finished = false;
-    level.banners = { top8Shown: false, top4Shown: false, gfShown: false };
+    // M3: banner 变量名统一
+    level.banners = { top8Shown: false, top3Shown: false, gfShown: false };
     level.pendingMatches = []; level.history = []; level.undoStack = []; level.grandFinal = null;
     for (const p of Object.values(level.players)) {
       p.losses = 0; p.eliminatedAt = null; p.placement = null; p.bracket = 'W';
@@ -227,6 +260,17 @@
     W.fillTables(level);
     events.push({ type: 'started' });
     return events;
+  };
+
+  // C1 helper: 安全的桌子缩减——把比赛收回到 pendingMatches
+  W.safelyReduceTables = function safelyReduceTables(level, targetCount) {
+    const cur = level.tables.length;
+    if (cur <= targetCount) return;
+    for (let i = targetCount; i < cur; i++) {
+      const t = level.tables[i];
+      if (t?.match) { t.match.tableNo = null; level.pendingMatches.unshift(t.match); }
+    }
+    level.tables = level.tables.slice(0, targetCount);
   };
 
   window.WACAA = W;
