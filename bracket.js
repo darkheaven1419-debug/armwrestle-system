@@ -34,6 +34,7 @@
     const wAlive = W.bracketPlayers(level, 'W');
     const lAlive = W.bracketPlayers(level, 'L');
     if (wAlive.length === 1 && lAlive.length === 1 && !level.grandFinal) {
+      W.setupGrandFinal(level, wAlive[0].id, lAlive[0].id);
       events.push({ type: 'grandFinal', wId: wAlive[0].id, lId: lAlive[0].id });
       return events;
     }

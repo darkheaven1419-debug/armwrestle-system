@@ -50,7 +50,7 @@
   };
 
   /* ---- 事件处理 ---- */
-  function processEvents(events) {
+  function processEvents(events, level) {
     if (!events) return;
     for (const evt of events) {
       if (evt.type === 'matchesGenerated') W.toast(`${evt.bracket === 'W' ? '胜者组' : '败者组'}生成 ${evt.count} 场对阵`);
@@ -61,7 +61,10 @@
         showBannerModal(evt.stage === 'top8' ? '前8强诞生' : '前3强诞生',
           evt.stage === 'top8' ? '当前级别已进入前8强阶段。' : '当前级别已进入前三强阶段。');
       }
-      else if (evt.type === 'grandFinal') W.toast('进入总决赛阶段');
+      else if (evt.type === 'grandFinal') {
+        W.toast('进入总决赛阶段');
+        if (level) showGrandFinalModal(level);
+      }
       else if (evt.type === 'gfComplete') {
         const lvl = W.getLevel(W.state.ui.route.tournamentId, W.state.ui.route.levelId)?.level;
         W.toast(`总决赛结束：冠军 ${lvl?.players?.[evt.winnerId]?.name || ''}`);
@@ -267,7 +270,7 @@
     level.maxTables = Math.max(level.maxTables, 1);
     if (!level.tables.length) level.tables = [{ tableNo: 1, match: null, undo: [] }];
     if (level.tables.length !== 1) level.tables = level.tables.slice(0, 1);
-    if (level.started && !level.finished) { processEvents(W.generateMatchesIfNeeded(level)); W.fillTables(level); }
+    if (level.started && !level.finished) { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); }
     const alive = W.alivePlayers(level).length;
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-hd' }, [
@@ -283,8 +286,8 @@
       el('div', { class: 'card-bd' }, [
         renderTable(level, 1, { compact: true }), el('div', { class: 'hr' }),
         el('div', { class: 'row' }, [el('button', { class: 'btn ok block', onclick: () => {
-          if (!level.started) processEvents(W.startLevel(level));
-          else { processEvents(W.generateMatchesIfNeeded(level)); W.fillTables(level); }
+          if (!level.started) processEvents(W.startLevel(level), level);
+          else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); }
           W.saveState(); W.render();
         } }, [level.started ? '补充对阵' : '开始比赛（1桌）'])]),
       ]),
@@ -295,7 +298,7 @@
   function renderLevel(tournamentId, levelId) {
     const { tournament, level } = W.getLevel(tournamentId, levelId);
     if (!tournament || !level) return W.setRoute({ name: 'home' });
-    if (level.started && !level.finished) { processEvents(W.generateMatchesIfNeeded(level)); W.fillTables(level); W.finalizeIfDone(level); }
+    if (level.started && !level.finished) { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); W.finalizeIfDone(level); }
     const wrap = el('div', { class: 'grid' }, []);
     wrap.appendChild(renderLevelHeader(tournamentId, tournament, level));
     wrap.appendChild(renderLevelBody(tournamentId, tournament, level));
@@ -315,7 +318,7 @@
       el('div', { class: 'kpi' }, [kpi('选手总数', String(total)), kpi('存活人数', String(alive)), kpi('已完成场次', String(done)), kpi('进度', `${pct}%`)]),
       el('div', { style: 'margin-top:10px;' }, [el('div', { class: 'progress' }, [el('div', { style: `width:${pct}%` }, [])])]),
       el('div', { class: 'row', style: 'margin-top:12px;' }, [
-        el('button', { class: 'btn ok', onclick: () => { if (!level.started) processEvents(W.startLevel(level)); else { processEvents(W.generateMatchesIfNeeded(level)); W.fillTables(level); } W.saveState(); W.render(); } }, [level.started ? '补充对阵' : '开始比赛']),
+        el('button', { class: 'btn ok', onclick: () => { if (!level.started) processEvents(W.startLevel(level), level); else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); } W.saveState(); W.render(); } }, [level.started ? '补充对阵' : '开始比赛']),
         el('button', { class: 'btn', onclick: () => openPlayerListModal(level) }, ['选手列表']),
         el('button', { class: 'btn', onclick: () => openRankingModal(level) }, ['实时名次']),
         el('button', { class: 'btn', onclick: () => { if (!level.started) { W.toast('尚未开始'); return; } const msg = W.undoLast(level, 'global'); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['全局撤回']),
@@ -431,8 +434,8 @@
     return el('div', {}, [
       playerBox(p1), el('div', { class: 'hr' }), playerBox(p2), el('div', { class: 'hr' }),
       el('div', { class: 'row' }, [
-        el('button', { class: 'btn ok block', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p1.id)); W.saveState(); W.render(); } }, [`${p1.name} 获胜`]),
-        el('button', { class: 'btn ok block', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p2.id)); W.saveState(); W.render(); } }, [`${p2.name} 获胜`]),
+        el('button', { class: 'btn ok block', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p1.id), level); W.saveState(); W.render(); } }, [`${p1.name} 获胜`]),
+        el('button', { class: 'btn ok block', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p2.id), level); W.saveState(); W.render(); } }, [`${p2.name} 获胜`]),
       ]),
     ]);
   }
