@@ -1,15 +1,19 @@
 /* Service Worker: PWA offline cache */
 /* global self */
 
-const CACHE_NAME = 'wacaa-pwa-v1';
+const CACHE_NAME = 'wacaa-pwa-v2';
 const PRECACHE_URLS = [
   './',
   './index.html',
- './index.html'，
+  './style.css',
   './manifest.webmanifest',
   './icons/icon.svg',
-  // 本地内置拼音库（离线可用）
   './vendor/pinyin-pro.js',
+  './utils.js',
+  './state.js',
+  './bracket.js',
+  './ui.js',
+  './app.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -42,20 +46,16 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
       try {
         const res = await fetch(req);
-        // 尝试缓存静态资源与外链（外链通常为 opaque，也可以缓存）
         const url = new URL(req.url);
-        const shouldCache = url.origin === self.location.origin;
-        if (shouldCache) {
+        if (url.origin === self.location.origin) {
           const cache = await caches.open(CACHE_NAME);
           cache.put(req, res.clone()).catch(() => {});
         }
         return res;
       } catch {
-        // 离线兜底：尽量回退到首页（单页应用）
         const fallback = await caches.match('./index.html');
         return fallback || new Response('offline', { status: 503 });
       }
     })()
   );
 });
-

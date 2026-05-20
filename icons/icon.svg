@@ -11,9 +11,12 @@
   </defs>
   <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
   <rect x="58" y="58" width="396" height="396" rx="98" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
-  <path d="M140 330c22-62 64-98 126-108 60-10 118 10 158 52" fill="none" stroke="url(#g)" stroke-width="22" stroke-linecap="round"/>
-  <path d="M170 318c18-42 48-66 92-74 46-8 90 6 120 34" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="10" stroke-linecap="round"/>
-  <text x="256" y="215" text-anchor="middle" font-family="system-ui,Segoe UI,Arial" font-size="56" fill="rgba(255,255,255,0.92)" font-weight="750">U�</text>
-  <text x="256" y="265" text-anchor="middle" font-family="system-ui,Segoe UI,Arial" font-size="22" fill="rgba(255,255,255,0.70)">�[��</text>
+  <!-- 腕力图标：两手相握 -->
+  <circle cx="180" cy="280" r="55" fill="none" stroke="url(#g)" stroke-width="14"/>
+  <circle cx="332" cy="280" r="55" fill="none" stroke="url(#g)" stroke-width="14"/>
+  <circle cx="180" cy="280" r="22" fill="rgba(255,255,255,0.7)"/>
+  <circle cx="332" cy="280" r="22" fill="rgba(255,255,255,0.7)"/>
+  <line x1="235" y1="280" x2="277" y2="280" stroke="rgba(255,255,255,0.92)" stroke-width="6" stroke-linecap="round"/>
+  <!-- W 字母 -->
+  <text x="256" y="430" text-anchor="middle" font-family="Arial,sans-serif" font-size="52" font-weight="bold" fill="rgba(255,255,255,0.92)">W</text>
 </svg>
-
