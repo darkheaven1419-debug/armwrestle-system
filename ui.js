@@ -168,13 +168,19 @@
     const ft = document.createElement('div');
     const exp = el('button', { class: 'btn primary', onclick: () => { body.querySelector('#jsonArea').value = JSON.stringify(W.state, null, 2); W.toast('已生成导出 JSON'); } }, ['导出']);
     const imp = el('button', { class: 'btn ok', onclick: () => {
-      const txt = body.querySelector('#jsonArea').value.trim(); const p = W.safeJsonParse(txt);
-      // N6: 结构验证
-      const vErr = W.validateImportData(p);
-      if (vErr) { alert('导入失败：' + vErr); return; }
+      const txt = body.querySelector('#jsonArea').value.trim();
+      if (!txt) { alert('导入失败：内容为空，请先粘贴 JSON'); return; }
+      const parsed = W.safeJsonParse(txt);
+      if (parsed == null) { alert('导入失败：不是合法的 JSON，请检查文件是否完整'); return; }
+      const result = W.normalizeState(parsed);
+      if (result.error) { alert('导入失败：' + result.error); return; }
       if (!confirm('导入会覆盖本地全部数据。导入前已自动备份，确定继续？')) return;
       W.backupState();  // 导入前先备份
-      W.state = p; W.saveState(); closeModal(); W.toast('导入成功'); W.render();
+      W.state = result.state; W.saveState(); closeModal();
+      W.toast(result.warnings.length
+        ? `导入成功，已自动修正 ${result.warnings.length} 处问题数据`
+        : '导入成功');
+      W.render();
     } }, ['导入（覆盖）']);
     ft.appendChild(el('button', { class: 'btn', onclick: closeModal }, ['关闭'])); ft.appendChild(exp); ft.appendChild(imp);
     openModal({ title: '导入/导出数据', bodyEl: body, footerEl: ft });
