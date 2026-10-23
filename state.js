@@ -9,14 +9,23 @@
   const MAX_BACKUPS = 3;
   // M4: 导出供 UI 层使用
   W.STORAGE_KEY = STORAGE_KEY;
+  W.BACKUP_KEY = BACKUP_KEY;
 
   W.state = { version: 1, tournaments: [], ui: { route: { name: 'home' } } };
+
+  /* 真正清空：主数据与自动备份一起删，否则下次启动会从备份“复活” */
+  W.clearAllData = function clearAllData() {
+    let ok = true;
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) { ok = false; }
+    try { localStorage.removeItem(BACKUP_KEY); } catch (e) { ok = false; }
+    return ok;
+  };
 
   /* ---- 初始化 ---- */
   W.loadState = function loadState() {
     const reset = new URLSearchParams(location.search).get('reset');
     if (reset === '1') {
-      localStorage.removeItem(STORAGE_KEY);
+      W.clearAllData();
       history.replaceState(null, '', location.pathname);
     }
     const raw = localStorage.getItem(STORAGE_KEY);

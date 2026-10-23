@@ -90,15 +90,36 @@
     const div = el('div', { class: 'row' }, []);
     if (route.name !== 'home') div.appendChild(el('button', { class: 'btn small', onclick: () => W.setRoute({ name: 'home' }) }, ['返回主界面']));
     div.appendChild(el('button', { class: 'btn small', onclick: () => openImportExportModal() }, ['导入/导出']));
-    // N7: 清空前提示导出
+    // 清空前自动下载 JSON 备份，并连备份键一起清掉
     div.appendChild(el('button', { class: 'btn small danger', onclick: () => {
-      const msg = '确定清空所有本地数据？建议先导出备份。\n\n按"确定"清空，按"取消"放弃。';
-      if (!confirm(msg)) return;
-      if (confirm('是否先导出数据？')) openImportExportModal();
-      try { localStorage.removeItem(W.STORAGE_KEY); } catch (e) {}
+      if (!confirm('确定清空所有本地数据？\n\n清空前会自动下载一份 JSON 备份到“下载”文件夹。')) return;
+      const downloaded = downloadStateJson();
+      W.clearAllData();
       W.state = W.loadState(); W.render();
+      W.toast(downloaded ? '已清空本地数据，备份已下载' : '已清空本地数据（自动备份下载失败，请手动导出）');
     } }, ['清空全部数据']));
     topActions.appendChild(div);
+  }
+
+  /* 把当前状态直接下载为 JSON 文件；返回是否成功 */
+  function downloadStateJson() {
+    try {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+      const blob = new Blob([JSON.stringify(W.state, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `腕力比赛数据-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   /* ==================== 主页 ==================== */
