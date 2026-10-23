@@ -73,7 +73,10 @@ function createWorker(stores, server) {
   sandbox.setTimeout = setTimeout;
   sandbox.clearTimeout = clearTimeout;
   sandbox.skipWaiting = () => { sandbox.__skipWaiting = true; };
-  sandbox.clients = { claim: () => { sandbox.__claimed = true; return Promise.resolve(); } };
+  sandbox.clients = {
+    claim: () => { sandbox.__claimed = true; return Promise.resolve(); },
+    matchAll: () => Promise.resolve(sandbox.__windows || []),
+  };
   sandbox.location = { origin: 'http://localhost:8000', href: 'http://localhost:8000/sw.js' };
   sandbox.addEventListener = (type, fn) => {
     if (!listeners.has(type)) listeners.set(type, []);
@@ -240,6 +243,91 @@ test('waiting worker 被浏览器回收后激活，仍切到已下载的新版�
   const meta = await stores.get('wacaa-meta').get('./__wacaa_meta__').json();
   assert.equal(meta.version, '2026.10.23-4');
   assert.equal(stores.get('wacaa-meta').has('./__wacaa_pending__'), false);
+});
+
+test('安装完整后跳过等待，避免一直停在 waiting', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const sw = createWorker(stores, server);
+  await sw.install();
+  assert.equal(sw.sandbox.__skipWaiting, true);
+});
+
+test('waiting worker 安装后服务器又发布新版，可重新检查并切换', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const active = createWorker(stores, server);
+  await active.install();
+  await active.activate();
+
+  // 新 Worker 在服务器仍是 -3 时安装并进入 waiting
+  const waiting = createWorker(stores, server);
+  await waiting.install();
+
+  // 之后只改 version.js 为 -4：waiting worker 必须能重新下载
+  server.version = '2026.10.23-4';
+  const ready = await waiting.send({ type: 'CHECK_UPDATE' });
+  assert.equal(ready.type, 'UPDATE_READY');
+  assert.equal(ready.version, '2026.10.23-4');
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-4'), true);
+
+  const applied = await waiting.send({ type: 'APPLY_UPDATE' });
+  assert.equal(applied.type, 'APPLIED');
+  const pending = await stores.get('wacaa-meta').get('./__wacaa_pending__').json();
+  assert.equal(pending.version, '2026.10.23-4');
+
+  // 跳过等待后激活，应保持 -4 并清理旧缓存
+  await waiting.activate();
+  const version = await waiting.send({ type: 'GET_VERSION' });
+  assert.equal(version.version, '2026.10.23-4');
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-4'), true);
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-3'), false);
+});
+
+test('新版本下载失败时清理不完整缓存，不破坏旧版本', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const sw = createWorker(stores, server);
+  await sw.install();
+  await sw.activate();
+
+  server.version = '2026.10.23-5';
+  server.missing.add('./ui.js');
+  await assert.rejects(sw.install());
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-5'), false);
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-3'), true);
+});
+
+test('激活后通知已打开页面（迁移时可提示刷新）', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const sw = createWorker(stores, server);
+  const posted = [];
+  sw.sandbox.__windows = [{ postMessage(message) { posted.push(message); } }];
+  await sw.install();
+  await sw.activate();
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].type, 'SW_ACTIVATED');
+  assert.equal(posted[0].version, '2026.10.23-3');
+});
+
+test('Worker 重启后仍能应用已下载好的更新', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const sw = createWorker(stores, server);
+  await sw.install();
+  await sw.activate();
+
+  server.version = '2026.10.23-4';
+  await sw.send({ type: 'CHECK_UPDATE' });
+
+  // 浏览器回收 Worker：新实例内存中没有 pendingVersion
+  const restarted = createWorker(stores, server);
+  const applied = await restarted.send({ type: 'APPLY_UPDATE' });
+  assert.equal(applied.type, 'APPLIED');
+  assert.equal(applied.version, '2026.10.23-4');
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-4'), true);
+  assert.equal(stores.has('wacaa-pwa-2026.10.23-3'), false);
 });
 
 test('离线时检查更新不会崩溃，也不影响当前版本', async () => {

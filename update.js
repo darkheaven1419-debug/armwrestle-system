@@ -10,6 +10,7 @@
   var dismissedVersion = null;
   var lastCheckAt = 0;
   var checkInFlight = false;
+  var waitingCheckInFlight = false;
 
   var MIN_CHECK_GAP_MS = 60 * 1000;
   var CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -151,18 +152,43 @@
     }).catch(function () { callback(null); });
   }
 
+  function applyWaitingUpdate(reg) {
+    return ask(reg.waiting, { type: 'APPLY_UPDATE' }, ASK_TIMEOUT_MS).then(function (reply) {
+      if (!reply || reply.type !== 'APPLIED') return false;
+      return activateWaiting(reg);
+    });
+  }
+
   function checkWaiting(reg) {
-    if (!reg || !reg.waiting) return;
-    ask(reg.waiting, { type: 'GET_VERSION' }, VERSION_TIMEOUT_MS).then(function (reply) {
-      var version = reply && reply.type === 'VERSION' ? reply.version : null;
-      var apply = function () { return activateWaiting(reg); };
-      if (version && isNewer(version)) {
-        showUpdateBanner(version, apply);
+    if (!reg || !reg.waiting || waitingCheckInFlight) return;
+    waitingCheckInFlight = true;
+    var worker = reg.waiting;
+    var applyWaiting = function () { return applyWaitingUpdate(reg); };
+    var applyReload = function () { return activateWaiting(reg); };
+
+    // 先让 waiting worker 重新向服务器确认版本：它可能是在更早的版本上安装的
+    ask(worker, { type: 'CHECK_UPDATE' }, ASK_TIMEOUT_MS).then(function (reply) {
+      waitingCheckInFlight = false;
+      if (reply && reply.type === 'UPDATE_READY') {
+        showUpdateBanner(reply.version, applyWaiting);
         return;
       }
-      // waiting worker 可能被浏览器回收重启（内存版本丢失），从缓存名兜底识别新版本
-      findNewerCachedVersion(function (cachedVersion) {
-        if (cachedVersion) showUpdateBanner(cachedVersion, apply);
+      if (reply && (reply.type === 'UPDATE_NONE' || reply.type === 'VERSION')
+        && reply.version && isNewer(reply.version)) {
+        showUpdateBanner(reply.version, applyReload);
+        return;
+      }
+      // 旧版 waiting worker 不支持 CHECK_UPDATE 或无法确认：退回读取版本号
+      ask(worker, { type: 'GET_VERSION' }, VERSION_TIMEOUT_MS).then(function (info) {
+        var version = info && info.type === 'VERSION' ? info.version : null;
+        if (version && isNewer(version)) {
+          showUpdateBanner(version, applyReload);
+          return;
+        }
+        // waiting worker 可能已被回收重启（内存版本丢失），从缓存名兜底识别
+        findNewerCachedVersion(function (cachedVersion) {
+          if (cachedVersion) showUpdateBanner(cachedVersion, applyReload);
+        });
       });
     });
   }
@@ -210,6 +236,13 @@
       if (!userRequestedUpdate || reloading) return;
       reloading = true;
       location.reload();
+    });
+
+    // 新 SW 激活后主动通知页面：旧页面（例如迁移前的缓存代码）也能提示刷新
+    navigator.serviceWorker.addEventListener('message', function (event) {
+      var data = event.data || {};
+      if (data.type !== 'SW_ACTIVATED' || !data.version) return;
+      if (isNewer(data.version)) showUpdateBanner(data.version, reloadNow);
     });
   }
 
