@@ -19,6 +19,83 @@
     return level.pendingMatches.some((m) => m.bracket === bracket);
   }
 
+  /*
+   * 只读对阵视图（不修改 level）：
+   * - 当前对阵：所有正在桌上的比赛；若总决赛未完成，也计入当前对阵。
+   * - 下一组上场：按 pendingMatches 现有队列顺序，取第一条双方都存活、
+   *   且没有被其他桌子占用的比赛。若队列里的比赛都在等当前桌结束，
+   *   返回队首那场并标记 waiting。
+   * 轮空不会进入 pendingMatches，因此不会被误当作下一组。
+   */
+  W.getMatchupView = function getMatchupView(level) {
+    const view = { current: [], next: null, nextStatus: 'none' };
+    if (!level || !level.started) { view.nextStatus = 'notStarted'; return view; }
+    if (level.finished) { view.nextStatus = 'finished'; return view; }
+
+    const players = level.players || {};
+    const isAlive = (id) => {
+      const p = players[id];
+      return !!p && p.losses < 2 && !p.eliminatedAt;
+    };
+    const inUse = new Set();
+    const tables = Array.isArray(level.tables) ? level.tables : [];
+    for (const t of tables) {
+      const m = t?.match;
+      if (!m) continue;
+      if (m.p1) inUse.add(m.p1);
+      if (m.p2) inUse.add(m.p2);
+      if (isAlive(m.p1) && isAlive(m.p2)) {
+        view.current.push({
+          source: 'table', tableNo: t.tableNo, bracket: m.bracket,
+          p1: m.p1, p2: m.p2, matchId: m.id || null, waiting: false,
+        });
+      }
+    }
+
+    const gf = level.grandFinal;
+    const gfPending = !!gf && !gf.completed && isAlive(gf.p1) && isAlive(gf.p2);
+    if (gfPending) {
+      view.current.push({
+        source: 'grandFinal', tableNo: null, bracket: 'GF',
+        p1: gf.p1, p2: gf.p2, matchId: null, waiting: false,
+        wins1: gf.wins1 || 0, wins2: gf.wins2 || 0,
+      });
+      inUse.add(gf.p1);
+      inUse.add(gf.p2);
+    }
+
+    // 总决赛期间不再从旧队列取“下一组”，避免显示已经不存在的赛程。
+    if (gfPending) { view.nextStatus = 'grandFinal'; return view; }
+
+    const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
+    let blocked = null;
+    for (const m of pending) {
+      if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
+      if (!isAlive(m.p1) || !isAlive(m.p2)) continue;
+      const candidate = {
+        source: 'pending', tableNo: null, bracket: m.bracket,
+        p1: m.p1, p2: m.p2, matchId: m.id || null, waiting: false,
+      };
+      if (inUse.has(m.p1) || inUse.has(m.p2)) {
+        if (!blocked) blocked = Object.assign({}, candidate, { waiting: true });
+        continue;
+      }
+      view.next = candidate;
+      view.nextStatus = 'ready';
+      return view;
+    }
+
+    if (blocked) {
+      view.next = blocked;
+      view.nextStatus = 'waiting';
+    } else if (view.current.length) {
+      view.nextStatus = 'pendingAfterCurrent';
+    } else {
+      view.nextStatus = 'none';
+    }
+    return view;
+  };
+
   /* ---- 对阵生成 ---- */
   W.generateMatchesIfNeeded = function generateMatchesIfNeeded(level) {
     const events = [];

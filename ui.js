@@ -334,6 +334,7 @@
         ]),
       ]),
       el('div', { class: 'card-bd' }, [
+        renderMatchupCard(level, { compact: true, inline: true }), el('div', { class: 'hr' }),
         renderTable(level, 1, { compact: true }), el('div', { class: 'hr' }),
         el('div', { class: 'row' }, [el('button', { class: 'btn ok block', onclick: () => {
           if (!level.started) { processEvents(W.startLevel(level), level); }
@@ -484,13 +485,89 @@
     openModal({ title: '实时名次', bodyEl: body, footerEl: el('div', {}, [el('button', { class: 'btn', onclick: closeModal }, ['关闭'])]) });
   }
 
+  function bracketLabel(bracket) {
+    if (bracket === 'L') return '败者组';
+    if (bracket === 'GF') return '总决赛';
+    return '胜者组';
+  }
+
+  function matchupName(level, id) {
+    return level.players?.[id]?.name || '待定';
+  }
+
+  function renderMatchupRow(level, item) {
+    const meta = [];
+    if (item.source === 'grandFinal') {
+      meta.push('总决赛', `比分 ${item.wins1}:${item.wins2}`);
+    } else {
+      meta.push(item.source === 'table' ? `桌子 #${item.tableNo}` : '候场队列', bracketLabel(item.bracket));
+      if (item.waiting) meta.push('等待当前比赛结束');
+    }
+    return el('div', { class: 'matchup-row' + (item.waiting ? ' waiting' : '') }, [
+      el('div', { class: 'matchup-meta' }, [meta.join(' · ')]),
+      el('div', { class: 'matchup-names' }, [
+        el('span', { class: 'matchup-name', 'data-player-id': item.p1 }, [matchupName(level, item.p1)]),
+        el('span', { class: 'matchup-vs' }, ['VS']),
+        el('span', { class: 'matchup-name', 'data-player-id': item.p2 }, [matchupName(level, item.p2)]),
+      ]),
+    ]);
+  }
+
+  function nextEmptyText(level, view) {
+    if (!level.started) return '比赛尚未开始';
+    if (level.finished) return '本级别比赛已结束';
+    if (view.nextStatus === 'grandFinal') return '总决赛进行中，暂无下一组';
+    if (view.nextStatus === 'pendingAfterCurrent') return '下一组待定：当前比赛结束后按赛程生成';
+    if (view.nextStatus === 'finished') return '本级别比赛已结束';
+    return '本级别暂无下一组';
+  }
+
+  function renderMatchupPanel(level, view, kind) {
+    const isCurrent = kind === 'current';
+    const items = isCurrent ? view.current : (view.next ? [view.next] : []);
+    let empty = '';
+    if (!items.length) {
+      if (isCurrent) {
+        empty = !level.started ? '比赛尚未开始' : level.finished ? '本级别比赛已结束' : '当前无进行中的对阵';
+      } else {
+        empty = nextEmptyText(level, view);
+      }
+    }
+    return el('div', { class: 'matchup-panel', 'data-matchup': kind }, [
+      el('div', { class: 'matchup-label' }, [isCurrent ? '当前对阵' : '下一组上场']),
+      items.length
+        ? el('div', { class: 'matchup-stack' }, items.map((item) => renderMatchupRow(level, item)))
+        : el('div', { class: 'matchup-empty' }, [empty]),
+    ]);
+  }
+
+  function renderMatchupCard(level, opts) {
+    opts = opts || {};
+    const view = W.getMatchupView(level);
+    const board = el('div', { class: 'matchup-board' + (opts.compact ? ' compact' : '') }, [
+      renderMatchupPanel(level, view, 'current'),
+      renderMatchupPanel(level, view, 'next'),
+    ]);
+    if (opts.inline) return board;
+    return el('div', { class: 'card matchup-card' }, [
+      el('div', { class: 'card-hd' }, [
+        el('div', {}, [el('div', { class: 'title' }, ['对阵看板']), el('div', { class: 'subtitle' }, ['当前对阵与下一组上场；结算后自动更新。'])]),
+        el('span', { class: 'badge' + (level.finished ? ' ok' : level.started ? ' warn' : '') }, [level.finished ? '已结束' : level.started ? '实时' : '未开始']),
+      ]),
+      el('div', { class: 'card-bd' }, [board]),
+    ]);
+  }
+
   function renderArena(level) {
     const tableCount = level.started ? W.computeTableCount(level) : level.maxTables;
     if (!level.tables.length) for (let i = 0; i < Math.min(tableCount, level.maxTables); i++) level.tables.push({ tableNo: i + 1, match: null, undo: [] });
-    return el('div', { class: 'grid' }, [el('div', { class: 'card' }, [
-      el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['多桌并行比赛']), el('div', { class: 'subtitle' }, ['点击获胜结算本桌。'])]), el('div', { class: 'row' }, [el('span', { class: 'badge' }, [`上限${level.maxTables}`]), el('span', { class: 'badge' }, [`当前${level.tables.length}`])])]),
-      el('div', { class: 'card-bd' }, [el('div', { class: 'arena-grid' }, level.tables.map((t) => renderTable(level, t.tableNo)))]),
-    ])]);
+    return el('div', { class: 'grid' }, [
+      renderMatchupCard(level),
+      el('div', { class: 'card' }, [
+        el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['多桌并行比赛']), el('div', { class: 'subtitle' }, ['点击获胜结算本桌。'])]), el('div', { class: 'row' }, [el('span', { class: 'badge' }, [`上限${level.maxTables}`]), el('span', { class: 'badge' }, [`当前${level.tables.length}`])])]),
+        el('div', { class: 'card-bd' }, [el('div', { class: 'arena-grid' }, level.tables.map((t) => renderTable(level, t.tableNo)))]),
+      ]),
+    ]);
   }
 
   function renderTable(level, tableNo, opts) {
