@@ -145,6 +145,28 @@ test('退赛会清理该选手的待赛和桌上比赛，并标记淘汰', () =>
   assert.equal(level.finished, true);
 });
 
+test('退赛可被全局撤回恢复到退赛前', () => {
+  const { W } = createApp();
+  const { level } = makeLevel(W, 8);
+  startLevel(W, level);
+
+  const table = level.tables.find((t) => t.match);
+  const playerId = table.match.p1;
+  const before = W.deepClone({
+    players: level.players,
+    pendingMatches: level.pendingMatches,
+    tables: level.tables,
+  });
+
+  assert.equal(W.withdrawPlayer(level, playerId), true);
+  assert.equal(W.undoLast(level, 'global'), '已撤销最近一场比赛');
+
+  assert.deepEqual(level.players, before.players);
+  assert.deepEqual(level.pendingMatches, before.pendingMatches);
+  assert.deepEqual(level.tables, before.tables);
+  assert.equal(W.alivePlayers(level).some((p) => p.id === playerId), true);
+});
+
 test('saveState / loadState 往返不丢赛事数据', () => {
   const storage = createStorage();
   const first = createApp({ storage });

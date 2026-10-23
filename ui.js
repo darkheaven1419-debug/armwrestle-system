@@ -385,9 +385,9 @@
     const alive = W.alivePlayers(level), eliminated = Object.values(level.players).filter((p) => p.losses >= 2 || p.eliminatedAt), total = Object.keys(level.players).length;
     const topList = Object.values(level.players).slice().filter((p) => p.name).sort((a, b) => {
       const ap = a.placement, bp = b.placement;
-      if (Number.isFinite(ap) && Number.isFinite(bp)) return bp - ap;
+      if (Number.isFinite(ap) && Number.isFinite(bp)) return ap - bp;
       if (Number.isFinite(ap)) return -1; if (Number.isFinite(bp)) return 1;
-      if (b.losses !== a.losses) return b.losses - a.losses;
+      if (a.losses !== b.losses) return a.losses - b.losses;
       return a.name.localeCompare(b.name, 'zh');
     });
     const addBox = el('div', { class: 'card' }, [
@@ -438,12 +438,12 @@
         level.started
           ? el('button', { class: 'btn small danger', onclick: () => {
               if (elim) return W.toast('该选手已淘汰/退赛');
-              if (!confirm(`确定让"${p.name}"退赛？此操作不可撤销。`)) return;
+              if (!confirm(`确定让"${p.name}"退赛？退赛后可用顶部的「全局撤回」撤销。`)) return;
               W.withdrawPlayer(level, p.id); W.saveState(); W.render();
-              W.toast(`${p.name} 已退赛`);
+              W.toast(`${p.name} 已退赛，可用「全局撤回」撤销`);
             } }, ['退赛'])
           : el('button', { class: 'btn small danger', onclick: () => { if (!confirm(`删除"${p.name}"？`)) return; W.deletePlayer(level, p.id); W.saveState(); W.render(); } }, ['删除']),
-        el('span', { class: `badge ${elim ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [elim && !p.losses ? '退赛' : `${Math.min(2, p.losses)}/2`]),
+        el('span', { class: `badge ${elim ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [W.isWithdrawn(level, p) ? '退赛' : `${Math.min(2, p.losses)}/2`]),
       ]),
     ]);
   }
@@ -452,7 +452,7 @@
     const medal = level.finished ? (p.placement === 1 ? '🥇' : p.placement === 2 ? '🥈' : p.placement === 3 ? '🥉' : '') : '';
     return el('div', { class: 'list-item' }, [
       el('div', { class: 'stack' }, [el('div', { class: 'name' }, [`${Number.isFinite(p.placement) ? '#' + p.placement : '未决出'} ${medal} ${p.name}`]), el('div', { class: 'py' }, [p.pinyin || ''])]),
-      el('span', { class: `badge ${p.losses >= 2 || p.eliminatedAt ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [p.eliminatedAt && p.losses < 2 ? '退赛' : `${Math.min(2, p.losses)}/2`]),
+      el('span', { class: `badge ${p.losses >= 2 || p.eliminatedAt ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [W.isWithdrawn(level, p) ? '退赛' : `${Math.min(2, p.losses)}/2`]),
     ]);
   }
 
@@ -517,7 +517,7 @@
     return el('div', { class: 'stack' }, [
       el('div', { class: 'name' }, [p?.name || '']), el('div', { class: 'py' }, [p?.pinyin || '']),
       el('div', { class: 'row', style: 'margin-top:6px;' }, [
-        el('span', { class: `badge ${(p.losses >= 2 || p.eliminatedAt) ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [p.eliminatedAt && p.losses < 2 ? '退赛' : `负场 ${Math.min(2, p.losses)}/2`]),
+        el('span', { class: `badge ${(p.losses >= 2 || p.eliminatedAt) ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [W.isWithdrawn(level, p) ? '退赛' : `负场 ${Math.min(2, p.losses)}/2`]),
         el('span', { class: 'badge' }, [p.bracket === 'W' ? '胜者组' : '败者组']),
       ]),
     ]);
@@ -536,11 +536,12 @@
       const pa = level.players[a], pb = level.players[b];
       if (!pa || !pb) return;
       if (pa.losses >= 2 || pb.losses >= 2 || pa.eliminatedAt || pb.eliminatedAt) return W.toast('淘汰/退赛选手不可参赛');
-      // C2: 自动推断组别——两者负场不同时，统一用高等级组别（W优先）
-      const br = (pa.losses === 0 && pb.losses === 0) ? 'W' : 'L';
-      pa.bracket = br; pb.bracket = br;
       const t = level.tables.find((x) => x.tableNo === tableNo);
-      if (!t || t.match) return;
+      if (!t || t.match) return W.toast('本桌已有比赛，无法分配');
+      // C2: 自动推断组别——只有确实分配到本桌时才改选手组别
+      const br = (pa.losses === 0 && pb.losses === 0) ? 'W' : 'L';
+      if (W.pushUndoSnapshot) { W.pushUndoSnapshot(level, `table:${tableNo}`); W.pushUndoSnapshot(level, 'global'); }
+      pa.bracket = br; pb.bracket = br;
       t.match = { id: W.uid(), createdAt: W.now(), bracket: br, p1: a, p2: b, tableNo };
       W.saveState(); W.render();
     };

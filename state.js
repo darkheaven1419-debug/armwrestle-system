@@ -116,10 +116,24 @@
     return { tournament, level };
   };
 
-  // N5: 允许在比赛开始后移除选手（因伤退赛等）
+  /* 已记录在历史里的负场数；退赛会直接补到 2 负但不产生历史记录 */
+  W.recordedLosses = function recordedLosses(level, playerId) {
+    return level.history.filter((h) => h.loserId === playerId).length;
+  };
+
+  /* 是否是“退赛”而不是正常输满两场（总决赛负者也会被补到 2 负，不算退赛） */
+  W.isWithdrawn = function isWithdrawn(level, p) {
+    if (!p || !p.eliminatedAt) return false;
+    const gf = level.grandFinal;
+    if (gf && (p.id === gf.p1 || p.id === gf.p2)) return false;
+    return W.recordedLosses(level, p.id) < p.losses;
+  };
+
+  // N5: 允许在比赛开始后移除选手（因伤退赛等）；退赛可被“全局撤回”撤销
   W.withdrawPlayer = function withdrawPlayer(level, playerId) {
     const p = level.players[playerId];
     if (!p || p.losses >= 2) return false;
+    if (W.pushUndoSnapshot) W.pushUndoSnapshot(level, 'global');
     p.losses = 2;
     p.eliminatedAt = now();
     // 清理该选手在队列和桌子上的所有比赛
@@ -350,9 +364,9 @@
     const existingNames = new Map(); // normalized key -> count (0 = from existing players)
     const dupes = [];
 
-    // 预加载已有选手
+    // 预加载已有选手：计数为 1，表示这个名字已被占用
     for (const p of Object.values(level.players)) {
-      existingNames.set(normalizeNameKey(p.name), 0);
+      existingNames.set(normalizeNameKey(p.name), 1);
     }
 
     let added = 0;
@@ -362,7 +376,7 @@
 
       let resolvedName;
       if (count === 0) {
-        // 首次出现（可能已有同名选手，也可能没有）
+        // 该姓名首次出现在本次输入中
         resolvedName = name;
         existingNames.set(baseKey, 1);
       } else {

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createApp, createStorage, makeLevel, startLevel, step } = require('./harness');
+const { createApp, createStorage, makeLevel, startLevel, step, runToEnd } = require('./harness');
 
 const KEY = 'wacaa_armwrestle_v1';
 const BACKUP = 'wacaa_armwrestle_backup';
@@ -130,6 +130,38 @@ test('导入校验：当前导出能原样往返', () => {
   assert.equal(l2.history.length, 1);
   assert.equal(l2.undoStack.length, level.undoStack.length);
   assert.ok(l2.tables.some((t) => t.match));
+});
+
+test('批量添加：与已有选手同名会加后缀，不再产生重名', () => {
+  const { W } = createApp();
+  const { level } = makeLevel(W, 2);
+  const result = W.batchAddPlayers(level, '选手01\n张三\n张三');
+  const names = Object.values(level.players).map((p) => p.name);
+
+  assert.equal(new Set(names).size, names.length);
+  assert.ok(names.includes('选手01(2)'));
+  assert.ok(names.includes('张三'));
+  assert.ok(names.includes('张三(2)'));
+  assert.deepEqual([...result.dupes], ['选手01', '张三']);
+});
+
+test('退赛识别：退赛为真，正常淘汰与总决赛负者为假', () => {
+  const { W } = createApp();
+  const { level } = makeLevel(W, 8);
+  startLevel(W, level);
+  const table = level.tables.find((t) => t.match);
+  const withdrawnId = table.match.p1;
+  W.withdrawPlayer(level, withdrawnId);
+  assert.equal(W.isWithdrawn(level, level.players[withdrawnId]), true);
+
+  runToEnd(W, level);
+  for (const p of Object.values(level.players)) {
+    if (p.id === withdrawnId) continue;
+    assert.equal(W.isWithdrawn(level, p), false, `${p.name} 不应显示退赛`);
+  }
+  const runnerUp = level.players[level.grandFinal.runnerUpId];
+  assert.equal(runnerUp.losses, 2);
+  assert.equal(W.isWithdrawn(level, runnerUp), false);
 });
 
 test('主数据损坏时仍能从备份恢复', () => {
