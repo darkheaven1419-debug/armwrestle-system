@@ -124,6 +124,13 @@
 
   /* ==================== 主页 ==================== */
   function renderHome() {
+    appRoot.appendChild(el('div', { class: 'page-head' }, [
+      el('div', {}, [
+        el('div', { class: 'eyebrow' }, ['WACAA · 赛事控制台']),
+        el('h1', { class: 'page-title' }, ['赛事总览']),
+        el('p', { class: 'page-desc' }, ['管理比赛与级别，实时记录双败淘汰赛程。数据仅保存在本机，离线可用。']),
+      ]),
+    ]));
     const wrap = el('div', { class: 'grid cols-2' }, []);
     const left = el('div', { class: 'card' }, [
       el('div', { class: 'card-hd' }, [
@@ -133,10 +140,10 @@
       el('div', { class: 'card-bd' }, [
         W.state.tournaments.length
           ? el('div', { class: 'list' }, W.state.tournaments.slice().sort((a, b) => b.createdAt - a.createdAt).map((t) => renderTournamentCard(t)))
-          : el('div', { class: 'muted' }, ['暂无比赛。点击"新建比赛"开始。']),
+          : el('div', { class: 'empty-state' }, [el('strong', {}, ['还没有比赛']), '点击右上角「新建比赛」开始编排。']),
       ]),
     ]);
-    const right = el('div', { class: 'card' }, [
+    const right = el('div', { class: 'card kpi-card' }, [
       el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['使用说明']), el('div', { class: 'subtitle' }, ['完全离线，5 分钟自动备份。'])])]),
       el('div', { class: 'card-bd' }, [
         el('div', { class: 'kpi' }, [kpi('已创建比赛', String(W.state.tournaments.length)), kpi('数据存储', 'localStorage'), kpi('赛制', '双败淘汰'), kpi('自动备份', '5分钟')]),
@@ -236,7 +243,7 @@
     const alive = W.alivePlayers(level).length;
     const tableWant = W.computeTableCount(level);
     const badge = level.finished ? el('span', { class: 'badge ok' }, ['已结束']) : level.started ? el('span', { class: 'badge warn' }, ['进行中']) : el('span', { class: 'badge' }, ['未开始']);
-    return el('div', { class: 'card clickable', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId: level.id }) }, [
+    return el('div', { class: 'card level-card clickable', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId: level.id }) }, [
       el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, [level.name]), el('div', { class: 'subtitle' }, [`存活：${alive}｜桌上限：${level.maxTables}｜自动：${tableWant}`])]), el('div', { class: 'row' }, [badge])]),
       el('div', { class: 'card-bd' }, [el('div', { class: 'row between' }, [el('div', { class: 'muted' }, [level.started ? (level.finished ? '已结束' : '进行中') : '未开始']), el('div', { class: 'row' }, [el('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); editLevelFlow(tournamentId, level.id); } }, ['编辑']), el('button', { class: 'btn small danger', onclick: (e) => { e.stopPropagation(); deleteLevelFlow(tournamentId, level.id); } }, ['删除'])])])]),
     ]);
@@ -298,8 +305,8 @@
     const t = W.state.tournaments.find((x) => x.id === tournamentId); if (!t) return W.setRoute({ name: 'home' });
     const levels = (levelIds || []).map((id) => t.levels.find((l) => l.id === id)).filter(Boolean);
     if (levels.length < 2) return W.setRoute({ name: 'tournament', tournamentId });
-    const header = el('div', { class: 'card' }, [el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['多级别同时开始']), el('div', { class: 'subtitle' }, ['每个级别 1 桌。'])]), el('div', { class: 'row' }, [el('button', { class: 'btn', onclick: () => W.setRoute({ name: 'tournament', tournamentId }) }, ['返回'])])])]);
-    appRoot.appendChild(el('div', { class: 'grid' }, [header, el('div', { class: 'grid cols-2' }, levels.map((lvl) => renderMiniLevelPanel(t.id, lvl.id)))]));
+    const header = el('div', { class: 'card' }, [el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['多级别同时开始']), el('div', { class: 'subtitle' }, ['每个级别 1 桌。'])]), el('div', { class: 'actions' }, [el('button', { class: 'btn', onclick: () => W.setRoute({ name: 'tournament', tournamentId }) }, ['返回'])])])]);
+    appRoot.appendChild(el('div', { class: 'grid' }, [header, el('div', { class: 'grid cols-2 multi-grid' }, levels.map((lvl) => renderMiniLevelPanel(t.id, lvl.id)))]));
   }
 
   function renderMiniLevelPanel(tournamentId, levelId) {
@@ -318,11 +325,11 @@
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-hd' }, [
         el('div', {}, [el('div', { class: 'title' }, [level.name]), el('div', { class: 'subtitle' }, [`存活：${alive}｜待赛：${level.pendingMatches.length}｜历史：${level.history.length}`])]),
-        el('div', { class: 'row' }, [
+        el('div', { class: 'actions' }, [
           el('button', { class: 'btn small', onclick: () => openPlayerListModal(level) }, ['选手']),
           el('button', { class: 'btn small', onclick: () => openRankingModal(level) }, ['名次']),
           el('button', { class: 'btn small', onclick: () => openHistoryModal(level) }, ['历史']),
-          el('button', { class: 'btn small primary', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛']),
+          el('button', { class: 'btn small', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛']),
           el('button', { class: 'btn small primary', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId }) }, ['进入']),
         ]),
       ]),
@@ -358,27 +365,27 @@
     const alive = W.alivePlayers(level).length, total = Object.keys(level.players).length;
     const done = level.history.length, pending = level.pendingMatches.length + level.tables.filter((t) => t.match).length;
     const pct = Math.round((done / Math.max(1, done + pending)) * 100);
-    return el('div', { class: 'card' }, [el('div', { class: 'card-bd' }, [
+    return el('div', { class: 'card level-hero' }, [el('div', { class: 'card-bd' }, [
       el('div', { class: 'row between' }, [
         el('div', { class: 'row' }, [el('div', { class: 'title' }, [level.name]), el('button', { class: 'btn small ghost', title: '改名', onclick: () => { const n = prompt('修改名称', level.name); if (n !== null) { level.name = (n || '').trim() || level.name; W.saveState(); W.render(); } } }, ['✎'])]),
-        el('div', { class: 'row' }, [el('span', { class: `badge ${level.finished ? 'ok' : level.started ? 'warn' : ''}` }, [level.finished ? '已结束' : level.started ? '进行中' : '未开始']), el('button', { class: 'btn small', onclick: () => W.setRoute({ name: 'tournament', tournamentId }) }, ['返回'])]),
+        el('div', { class: 'actions' }, [el('span', { class: `badge ${level.finished ? 'ok' : level.started ? 'warn' : ''}` }, [level.finished ? '已结束' : level.started ? '进行中' : '未开始']), el('button', { class: 'btn small', onclick: () => W.setRoute({ name: 'tournament', tournamentId }) }, ['返回'])]),
       ]),
       el('div', { class: 'hr' }),
       el('div', { class: 'kpi' }, [kpi('选手总数', String(total)), kpi('存活人数', String(alive)), kpi('已完成场次', String(done)), kpi('进度', `${pct}%`)]),
       el('div', { style: 'margin-top:10px;' }, [el('div', { class: 'progress' }, [el('div', { style: `width:${pct}%` }, [])])]),
-      el('div', { class: 'row', style: 'margin-top:12px;' }, [
-        el('button', { class: 'btn ok', onclick: () => { if (!level.started) { processEvents(W.startLevel(level), level); } else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); } W.saveState(); W.render(); } }, [level.started ? '补充对阵' : '开始比赛']),
+      el('div', { class: 'actions', style: 'margin-top:16px;' }, [
+        el('button', { class: 'btn primary', onclick: () => { if (!level.started) { processEvents(W.startLevel(level), level); } else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); } W.saveState(); W.render(); } }, [level.started ? '补充对阵' : '开始比赛']),
         el('button', { class: 'btn', onclick: () => openPlayerListModal(level) }, ['选手列表']),
         el('button', { class: 'btn', onclick: () => openRankingModal(level) }, ['实时名次']),
         el('button', { class: 'btn', onclick: () => { if (!level.started) { W.toast('尚未开始'); return; } const msg = W.undoLast(level, 'global'); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['全局撤回']),
         el('button', { class: 'btn', onclick: () => openHistoryModal(level) }, ['比赛历史']),
         el('button', { class: 'btn danger', onclick: () => { if (!confirm('确定清空本级别所有数据？')) return; const keep = { id: level.id, name: level.name, maxTables: level.maxTables, createdAt: level.createdAt }; const fresh = W.createLevel({ name: keep.name, maxTables: keep.maxTables }); Object.assign(level, fresh, keep); W.saveState(); W.render(); } }, ['清空本级别']),
-        el('button', { class: 'btn primary', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['总决赛面板']),
+        el('button', { class: 'btn', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['总决赛面板']),
       ]),
     ])]);
   }
 
-  function renderLevelBody(tournamentId, tournament, level) { return el('div', { class: 'split' }, [renderPlayerSidebar(level), renderArena(level)]); }
+  function renderLevelBody(tournamentId, tournament, level) { return el('div', { class: 'split' + (level.started ? ' arena-first' : '') }, [renderPlayerSidebar(level), renderArena(level)]); }
 
   function renderPlayerSidebar(level) {
     W.computePlacements(level);
@@ -422,7 +429,7 @@
 
     const summary = el('div', { class: 'card' }, [
       el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['当前状态']), el('div', { class: 'subtitle' }, [`总人数 ${total}｜存活 ${alive.length}｜淘汰 ${eliminated.length}`])])]),
-      el('div', { class: 'card-bd' }, [level.started ? el('div', { class: 'list' }, topList.slice(0, 8).map((p) => renderRankRow(level, p))) : el('div', { class: 'muted' }, ['比赛未开始。添加选手并抽签后开始。'])]),
+      el('div', { class: 'card-bd' }, [level.started ? el('div', { class: 'list' }, topList.slice(0, 8).map((p) => renderRankRow(level, p))) : el('div', { class: 'empty-state' }, [el('strong', {}, ['比赛未开始']), '添加选手并抽签后开始。'])]),
     ]);
 
     return el('div', { class: 'grid' }, [addBox, summary]);
@@ -482,7 +489,7 @@
     if (!level.tables.length) for (let i = 0; i < Math.min(tableCount, level.maxTables); i++) level.tables.push({ tableNo: i + 1, match: null, undo: [] });
     return el('div', { class: 'grid' }, [el('div', { class: 'card' }, [
       el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['多桌并行比赛']), el('div', { class: 'subtitle' }, ['点击获胜结算本桌。'])]), el('div', { class: 'row' }, [el('span', { class: 'badge' }, [`上限${level.maxTables}`]), el('span', { class: 'badge' }, [`当前${level.tables.length}`])])]),
-      el('div', { class: 'card-bd' }, [el('div', { class: 'grid cols-2' }, level.tables.map((t) => renderTable(level, t.tableNo)))]),
+      el('div', { class: 'card-bd' }, [el('div', { class: 'arena-grid' }, level.tables.map((t) => renderTable(level, t.tableNo)))]),
     ])]);
   }
 
@@ -491,30 +498,38 @@
     const t = level.tables.find((x) => x.tableNo === tableNo), match = t?.match;
     W.computePlacements(level);
     const champ = Object.values(level.players).find((p) => p.placement === 1);
-    return el('div', { class: 'card', style: opts.compact ? 'box-shadow:none;' : '' }, [
+    return el('div', { class: 'card table-card' + (match ? ' live' : '') }, [
       el('div', { class: 'card-hd' }, [
-        el('div', {}, [el('div', { class: 'title' }, [`桌子 #${tableNo}`]), el('div', { class: 'subtitle' }, [match ? (match.bracket === 'W' ? '胜者组' : '败者组') : '空闲'])]),
+        el('div', {}, [el('div', { class: 'title table-no' }, [`桌子 #${tableNo}`]), el('div', { class: 'subtitle' }, [match ? (match.bracket === 'W' ? '胜者组' : '败者组') : '空闲'])]),
         el('div', { class: 'row' }, [el('button', { class: 'btn small', onclick: () => { if (!level.started) return W.toast('开始后才能撤回'); const msg = W.undoLast(level, `table:${tableNo}`); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['本桌撤回'])]),
       ]),
       el('div', { class: 'card-bd' }, [match ? renderMatchPanel(level, tableNo, match) : (level.finished && champ ? renderChampionPanel(champ) : renderManualAssign(level, tableNo))]),
     ]);
   }
 
-  function renderChampionPanel(champ) { return el('div', {}, [el('div', { class: 'title' }, [`冠军：${champ.name}`]), el('div', { class: 'py' }, [champ.pinyin || '']), el('div', { class: 'hr' }), el('div', { class: 'hint' }, ['比赛已结束。'])]); }
+  function renderChampionPanel(champ) {
+    return el('div', { class: 'champion-panel' }, [
+      el('div', { class: 'champion-medal' }, ['🥇']),
+      el('div', { class: 'champion-name' }, [champ.name]),
+      el('div', { class: 'py' }, [champ.pinyin || '']),
+      el('div', { class: 'hr' }),
+      el('div', { class: 'hint' }, ['比赛已结束。']),
+    ]);
+  }
 
   function renderMatchPanel(level, tableNo, match) {
     const p1 = level.players[match.p1], p2 = level.players[match.p2];
-    return el('div', {}, [
-      playerBox(p1), el('div', { class: 'hr' }), playerBox(p2), el('div', { class: 'hr' }),
-      el('div', { class: 'row' }, [
-        el('button', { class: 'btn ok block', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p1.id), level); W.saveState(); W.render(); } }, [`${p1.name} 获胜`]),
-        el('button', { class: 'btn ok block', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p2.id), level); W.saveState(); W.render(); } }, [`${p2.name} 获胜`]),
+    return el('div', { class: 'match-panel' }, [
+      playerBox(level, p1), el('div', { class: 'vs' }, ['VS']), playerBox(level, p2),
+      el('div', { class: 'win-actions' }, [
+        el('button', { class: 'btn ok block win-btn', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p1.id), level); W.saveState(); W.render(); } }, [`${p1.name} 获胜`]),
+        el('button', { class: 'btn ok block win-btn', onclick: () => { processEvents(W.resolveMatch(level, tableNo, p2.id), level); W.saveState(); W.render(); } }, [`${p2.name} 获胜`]),
       ]),
     ]);
   }
 
-  function playerBox(p) {
-    return el('div', { class: 'stack' }, [
+  function playerBox(level, p) {
+    return el('div', { class: 'stack player-box' }, [
       el('div', { class: 'name' }, [p?.name || '']), el('div', { class: 'py' }, [p?.pinyin || '']),
       el('div', { class: 'row', style: 'margin-top:6px;' }, [
         el('span', { class: `badge ${(p.losses >= 2 || p.eliminatedAt) ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [W.isWithdrawn(level, p) ? '退赛' : `负场 ${Math.min(2, p.losses)}/2`]),
@@ -568,7 +583,7 @@
     const gf = level.grandFinal; if (!gf) return;
     const p1 = level.players[gf.p1], p2 = level.players[gf.p2];
     const body = document.createElement('div');
-    body.innerHTML = `<div class="row between" style="margin-bottom:10px;"><div class="stack"><div class="title">总决赛（BO3 三局两胜）</div><div class="subtitle">胜者组冠军 vs 败者组冠军</div></div><span class="badge warn">进行中</span></div><div class="grid cols-2"><div class="card" style="box-shadow:none;"><div class="card-bd"><div class="name">${escapeHtml(p1?.name || '')}</div><div class="py">${escapeHtml(p1?.pinyin || '')}</div><div class="hr"></div><div class="row between"><div class="muted">胜局</div><div class="title" style="font-size:22px;">${gf.wins1}</div></div><div style="margin-top:10px;"><button class="btn ok block" id="gfP1Win">本局胜利</button></div></div></div><div class="card" style="box-shadow:none;"><div class="card-bd"><div class="name">${escapeHtml(p2?.name || '')}</div><div class="py">${escapeHtml(p2?.pinyin || '')}</div><div class="hr"></div><div class="row between"><div class="muted">胜局</div><div class="title" style="font-size:22px;">${gf.wins2}</div></div><div style="margin-top:10px;"><button class="btn ok block" id="gfP2Win">本局胜利</button></div></div></div></div><div class="hint" style="margin-top:10px;">先赢 2 局者夺冠。<button class="btn small danger" id="gfUndo" style="margin-left:10px;">撤销上一局</button></div>`;
+    body.innerHTML = `<div class="gf-head"><div class="stack"><div class="title">总决赛（BO3 三局两胜）</div><div class="subtitle">胜者组冠军 vs 败者组冠军</div></div><span class="badge warn">进行中</span></div><div class="grid cols-2"><div class="player-box"><div class="name">${escapeHtml(p1?.name || '')}</div><div class="py">${escapeHtml(p1?.pinyin || '')}</div><div class="hr"></div><div class="row between"><div class="muted">胜局</div><div class="gf-score">${gf.wins1}</div></div><div style="margin-top:12px;"><button class="btn ok block" id="gfP1Win">本局胜利</button></div></div><div class="player-box"><div class="name">${escapeHtml(p2?.name || '')}</div><div class="py">${escapeHtml(p2?.pinyin || '')}</div><div class="hr"></div><div class="row between"><div class="muted">胜局</div><div class="gf-score">${gf.wins2}</div></div><div style="margin-top:12px;"><button class="btn ok block" id="gfP2Win">本局胜利</button></div></div></div><div class="hint" style="margin-top:12px;">先赢 2 局者夺冠。<button class="btn small danger" id="gfUndo" style="margin-left:10px;">撤销上一局</button></div>`;
     openModal({ title: '总决赛开始', bodyEl: body, footerEl: el('div', {}, [el('button', { class: 'btn', onclick: closeModal }, ['稍后再记'])]) });
     body.querySelector('#gfP1Win').onclick = () => { const evt = W.recordGrandFinalWin(level, 1); W.saveState(); closeModal(); W.render(); if (evt?.type === 'gfComplete') W.toast(`冠军 ${level.players[evt.winnerId]?.name || ''}`); else if (!level.grandFinal?.completed) showGrandFinalModal(level); };
     body.querySelector('#gfP2Win').onclick = () => { const evt = W.recordGrandFinalWin(level, 2); W.saveState(); closeModal(); W.render(); if (evt?.type === 'gfComplete') W.toast(`冠军 ${level.players[evt.winnerId]?.name || ''}`); else if (!level.grandFinal?.completed) showGrandFinalModal(level); };
