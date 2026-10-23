@@ -16,7 +16,7 @@
         <div class="topbar-inner">
           <div class="brand">
             <div class="brand-title">世界华人腕力协会比赛系统</div>
-            <div class="brand-sub">开发者：张梓桐</div>
+            <div class="brand-sub">开发者：张梓桐<span id="appVersion"></span></div>
           </div>
           <div class="top-actions" id="topActions"></div>
         </div>
@@ -39,19 +39,15 @@
 
     <!-- 拼音库：暴露 window.pinyinPro -->
     <script src="./vendor/pinyin-pro.js"></script>
+    <!-- 版本号：页面与 Service Worker 共用 -->
+    <script src="./version.js"></script>
     <!-- 应用代码：按依赖顺序加载 -->
     <script src="./utils.js"></script>
     <script src="./state.js"></script>
     <script src="./bracket.js"></script>
     <script src="./ui.js"></script>
     <script src="./app.js"></script>
-    <!-- Service Worker -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js').catch(() => {});
-        });
-      }
-    </script>
+    <!-- Service Worker 注册与更新提示 -->
+    <script src="./update.js"></script>
   </body>
 </html>
