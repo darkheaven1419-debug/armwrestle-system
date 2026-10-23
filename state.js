@@ -50,11 +50,31 @@
     return raw ? safeJsonParse(raw) || [] : [];
   }
 
+  /* 备份里不存撤销栈（方案 A）：撤销栈在快照中占绝大部分体积，而备份只用于恢复赛事数据 */
+  function stateForBackup() {
+    const copy = deepClone(W.state);
+    for (const t of copy.tournaments || []) {
+      for (const l of t.levels || []) l.undoStack = [];
+    }
+    return copy;
+  }
+
   W.backupState = function backupState() {
-    const backups = loadBackups();
-    backups.unshift(deepClone(W.state));
-    if (backups.length > MAX_BACKUPS) backups.length = MAX_BACKUPS;
-    localStorage.setItem(BACKUP_KEY, JSON.stringify(backups));
+    const snapshot = stateForBackup();
+    try {
+      const backups = loadBackups();
+      backups.unshift(snapshot);
+      if (backups.length > MAX_BACKUPS) backups.length = MAX_BACKUPS;
+      localStorage.setItem(BACKUP_KEY, JSON.stringify(backups));
+    } catch (e) {
+      // 空间不足时退化为只保留最近 1 份，绝不让异常冒到调用方
+      try {
+        localStorage.setItem(BACKUP_KEY, JSON.stringify([snapshot]));
+        if (W.toast) W.toast('存储空间紧张：自动备份已只保留最近 1 份');
+      } catch (e2) {
+        if (W.toast) W.toast('自动备份失败：存储空间不足，请立即导出数据');
+      }
+    }
   };
 
   /* ---- 工厂函数 ---- */
