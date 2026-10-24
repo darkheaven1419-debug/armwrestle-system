@@ -783,20 +783,6 @@ input[type="checkbox"] {
   text-align: center;
 }
 
-.matchup-board.compact { gap: 8px; }
-
-.matchup-board.compact .matchup-panel { gap: 6px; padding: 10px 12px; }
-
-.matchup-board.compact .matchup-label { font-size: 10.5px; letter-spacing: 1.2px; }
-
-.matchup-board.compact .matchup-meta { font-size: 10.5px; margin-bottom: 3px; }
-
-.matchup-board.compact .matchup-name { font-size: 16px; }
-
-.matchup-board.compact .matchup-panel[data-matchup="current"] .matchup-name { font-size: 18px; }
-
-.matchup-board.compact .matchup-empty { min-height: 44px; padding: 8px; font-size: 11.5px; }
-
 .table-card { position: relative; }
 
 .table-card.live {
@@ -1007,30 +993,6 @@ input[type="checkbox"] {
   padding: 10px 12px 12px;
 }
 
-/* 三列中的当前/下一组再收紧一档，但姓名仍保持可读字号 */
-.multi-grid .matchup-board.compact { gap: 6px; }
-
-.multi-grid .matchup-board.compact .matchup-panel { padding: 8px 9px; gap: 4px; }
-
-.multi-grid .matchup-board.compact .matchup-label { font-size: 10px; letter-spacing: 1px; }
-
-.multi-grid .matchup-board.compact .matchup-meta {
-  font-size: 10px;
-  margin-bottom: 2px;
-}
-
-.multi-grid .matchup-board.compact .matchup-name { font-size: 17px; }
-
-.multi-grid .matchup-board.compact .matchup-panel[data-matchup="current"] .matchup-name {
-  font-size: 19px;
-}
-
-.multi-grid .matchup-board.compact .matchup-empty {
-  min-height: 38px;
-  padding: 6px;
-  font-size: 11px;
-}
-
 /* 比赛桌吃掉级别面板的剩余高度：选手区变大，按钮固定在桌底 */
 .mini-stage {
   display: flex;
@@ -1138,6 +1100,99 @@ input[type="checkbox"] {
 
 .mini-fill-btn { min-height: 34px; font-size: 13px; }
 
+/* 三桌控制台：下一组上场独立成块，位于比赛桌与操作下方 */
+.mini-next {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--gold-line);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(300px 90px at 50% 0%, rgba(227, 178, 91, 0.12), transparent 72%),
+    var(--bg-elev);
+}
+
+.mini-next-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.8px;
+  line-height: 1.3;
+}
+
+.mini-next-label::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 1px solid var(--gold-strong);
+  box-shadow: 0 0 10px rgba(227, 178, 91, 0.7);
+  flex: 0 0 auto;
+}
+
+.mini-next-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mini-next-names {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.mini-next-name {
+  min-width: 0;
+  font-size: clamp(20px, 1.6vw, 32px);
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.mini-next-vs {
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+}
+
+.mini-next-meta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.mini-next-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.mini-next.waiting .mini-next-name { color: var(--text-2); }
+
 /* 未开赛时比赛桌没有对阵：让排桌入口占据桌面高度，而不是在桌底留洞 */
 .mini-details {
   display: flex;
@@ -1196,15 +1251,6 @@ input[type="checkbox"] {
   .mini-level-tools .btn { min-height: 30px; font-size: 12px; }
 
   .mini-level-bd { gap: 12px; padding: 12px 14px 14px; }
-
-  .multi-grid .matchup-board.compact { gap: 8px; }
-  .multi-grid .matchup-board.compact .matchup-panel { padding: 10px 12px; gap: 5px; }
-  .multi-grid .matchup-board.compact .matchup-label { font-size: 11px; }
-  .multi-grid .matchup-board.compact .matchup-meta { font-size: 11px; }
-  .multi-grid .matchup-board.compact .matchup-name { font-size: 19px; }
-  .multi-grid .matchup-board.compact .matchup-panel[data-matchup="current"] .matchup-name {
-    font-size: 23px;
-  }
 
   .mini-stage { gap: 10px; padding: 10px 12px 12px; }
   .mini-stage-hd .btn { min-height: 30px; padding: 3px 12px; font-size: 12px; }
@@ -1424,14 +1470,15 @@ input[type="checkbox"] {
   .win-actions .btn { min-height: 50px; font-size: 15.5px; }
 
   /* 手机上当前/下一组上下叠放，两组都留在页面内，不隐藏、不横滚 */
-  .matchup-board,
-  .matchup-board.compact { grid-template-columns: minmax(0, 1fr); }
+  .matchup-board { grid-template-columns: minmax(0, 1fr); }
 
   .matchup-card .card-bd { padding: 12px; }
   .matchup-panel { padding: 12px; }
   .matchup-name { font-size: 21px; }
-  .matchup-board.compact .matchup-name { font-size: 17px; }
-  .matchup-board.compact .matchup-panel[data-matchup="current"] .matchup-name { font-size: 19px; }
+
+  /* 三桌控制台：手机端下一组姓名保持可读，不裁切、不横滚 */
+  .mini-next { padding: 12px; }
+  .mini-next-name { font-size: 22px; }
 
   .modal-backdrop { padding: 0; align-items: flex-end; }
   .modal {

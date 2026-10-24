@@ -342,13 +342,14 @@
         ]),
       ]),
       el('div', { class: 'card-bd mini-level-bd' }, [
-        renderMatchupCard(level, { compact: true, inline: true }),
         renderMiniTableControl(level, 1),
         el('button', { class: 'btn ok block mini-fill-btn', 'data-action': 'fill', 'data-level-id': level.id, onclick: () => {
           if (!level.started) { processEvents(W.startLevel(level), level); }
           else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); }
           W.saveState(); W.render(); // C4
         } }, [level.started ? '补充对阵' : '开始比赛（1桌）']),
+        // 真实比赛桌已显示当前双方，控制台不再重复「当前对阵」，只保留下方下一组区域
+        renderMiniNextUp(level),
       ]),
     ]);
   }
@@ -560,16 +561,17 @@
     return level.players?.[id]?.name || '待定';
   }
 
+  function matchupMeta(item) {
+    if (!item) return '';
+    if (item.source === 'grandFinal') return `总决赛 · 比分 ${item.wins1}:${item.wins2}`;
+    const meta = [item.source === 'table' ? `桌子 #${item.tableNo}` : '候场队列', bracketLabel(item.bracket)];
+    if (item.waiting) meta.push('等待当前比赛结束');
+    return meta.join(' · ');
+  }
+
   function renderMatchupRow(level, item) {
-    const meta = [];
-    if (item.source === 'grandFinal') {
-      meta.push('总决赛', `比分 ${item.wins1}:${item.wins2}`);
-    } else {
-      meta.push(item.source === 'table' ? `桌子 #${item.tableNo}` : '候场队列', bracketLabel(item.bracket));
-      if (item.waiting) meta.push('等待当前比赛结束');
-    }
     return el('div', { class: 'matchup-row' + (item.waiting ? ' waiting' : '') }, [
-      el('div', { class: 'matchup-meta' }, [meta.join(' · ')]),
+      el('div', { class: 'matchup-meta' }, [matchupMeta(item)]),
       el('div', { class: 'matchup-names' }, [
         el('span', { class: 'matchup-name', 'data-player-id': item.p1 }, [matchupName(level, item.p1)]),
         el('span', { class: 'matchup-vs' }, ['VS']),
@@ -585,6 +587,29 @@
     if (view.nextStatus === 'pendingAfterCurrent') return '下一组待定：当前比赛结束后按赛程生成';
     if (view.nextStatus === 'finished') return '本级别比赛已结束';
     return '本级别暂无下一组';
+  }
+
+  /*
+   * 三桌控制台专用：真实比赛桌已显示当前双方，这里只放一块独立的「下一组上场」。
+   * 数据仍来自 W.getMatchupView(level)，赛程结算后随 W.render() 自动更新。
+   */
+  function renderMiniNextUp(level) {
+    const view = W.getMatchupView(level);
+    const item = view.next;
+    const cls = 'mini-next' + (item ? '' : ' empty') + (item && item.waiting ? ' waiting' : '');
+    return el('section', { class: cls, 'data-next-level-id': level.id }, [
+      el('div', { class: 'mini-next-label' }, ['下一组上场']),
+      item
+        ? el('div', { class: 'mini-next-body' }, [
+          el('div', { class: 'mini-next-names' }, [
+            el('span', { class: 'mini-next-name', 'data-player-id': item.p1 }, [matchupName(level, item.p1)]),
+            el('span', { class: 'mini-next-vs' }, ['VS']),
+            el('span', { class: 'mini-next-name', 'data-player-id': item.p2 }, [matchupName(level, item.p2)]),
+          ]),
+          el('div', { class: 'mini-next-meta' }, [matchupMeta(item)]),
+        ])
+        : el('div', { class: 'mini-next-empty' }, [nextEmptyText(level, view)]),
+    ]);
   }
 
   function renderMatchupPanel(level, view, kind) {
@@ -606,14 +631,12 @@
     ]);
   }
 
-  function renderMatchupCard(level, opts) {
-    opts = opts || {};
+  function renderMatchupCard(level) {
     const view = W.getMatchupView(level);
-    const board = el('div', { class: 'matchup-board' + (opts.compact ? ' compact' : '') }, [
+    const board = el('div', { class: 'matchup-board' }, [
       renderMatchupPanel(level, view, 'current'),
       renderMatchupPanel(level, view, 'next'),
     ]);
-    if (opts.inline) return board;
     return el('div', { class: 'card matchup-card' }, [
       el('div', { class: 'card-hd' }, [
         el('div', {}, [el('div', { class: 'title' }, ['对阵看板']), el('div', { class: 'subtitle' }, ['当前对阵与下一组上场；结算后自动更新。'])]),
