@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>世界华人腕力协会比赛系统</title>
+    <meta name="description" content="世界华人腕力协会比赛系统（开发者：张梓桐）" />
+    <meta name="theme-color" content="#0b0c0f" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div class="topbar">
+        <div class="topbar-inner">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">腕</div>
+            <div class="brand-text">
+              <div class="brand-title">世界华人腕力协会比赛系统</div>
+              <div class="brand-sub">WACAA · 赛事控制台 · 开发者：张梓桐<span id="appVersion"></span></div>
+            </div>
+          </div>
+          <div class="top-actions" id="topActions"></div>
+        </div>
+      </div>
+      <div class="content" id="app"></div>
+    </div>
+
+    <div class="toast-wrap" id="toasts"></div>
+
+    <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true">
+      <div class="modal">
+        <div class="modal-hd">
+          <div class="title" id="modalTitle">标题</div>
+          <button class="btn small ghost" id="modalCloseBtn">关闭</button>
+        </div>
+        <div class="modal-bd" id="modalBody"></div>
+        <div class="modal-ft" id="modalFooter"></div>
+      </div>
+    </div>
+
+    <!-- 拼音库：暴露 window.pinyinPro -->
+    <script src="./vendor/pinyin-pro.js"></script>
+    <!-- 版本号：页面与 Service Worker 共用 -->
+    <script src="./version.js"></script>
+    <!-- 应用代码：按依赖顺序加载 -->
+    <script src="./utils.js"></script>
+    <script src="./state.js"></script>
+    <script src="./bracket.js"></script>
+    <script src="./ui.js"></script>
+    <script src="./app.js"></script>
+    <!-- 版本比较（更新检测用）与 Service Worker 注册/更新提示 -->
+    <script src="./update-core.js"></script>
+    <script src="./update.js"></script>
+  </body>
+</html>
