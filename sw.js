@@ -13,7 +13,7 @@ const NAV_TIMEOUT_MS = 4000;
  * 首次安装且网络拿不到 version.js 时的兜底版本。
  * 正常安装一律以服务器上的 version.js 为准；只有改动 sw.js 时才需要同步这个值。
  */
-const FALLBACK_VERSION = '2026.10.23-8';
+const FALLBACK_VERSION = '2026.10.23-9';
 
 const PRECACHE_URLS = [
   './',
@@ -187,16 +187,27 @@ async function deleteOtherCaches(keepVersion) {
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     await ensureReady();
+    const previous = await readMetaVersion();
     // 安装时以服务器上的 version.js 为准（包括首次安装和 sw.js 变更后的重装）
     const published = await fetchPublishedVersion();
     if (published) currentVersion = published;
     await precacheInto(currentVersion);
     await writePendingVersion(currentVersion);
     /*
-     * 新缓存已完整下载，立即跳过等待并接管页面。
-     * 不这样做的话，旧页面要一直关到没有标签页才会激活，更新会永远卡在 waiting。
+     * 有页面正在使用时，版本升级必须让新 Worker 留在 waiting：
+     * 页面上的「立即更新」会发送 SKIP_WAITING 再激活。若这里直接 skipWaiting，
+     * 新 Worker 可能在用户点击前自动接管，旧页面手里的 waiting 引用失效，
+     * 点击更新反而报“更新失败”。
+     * 没有页面打开，或只是同版本更换 SW 字节时，仍然立即激活。
+     *
+     * 安装中的 Worker 还没有控制任何页面，matchAll 必须带 includeUncontrolled，
+     * 否则只会返回空数组，条件跳过等待永远不会生效（已用真实浏览器验证）。
      */
-    self.skipWaiting();
+    const windows = self.clients && typeof self.clients.matchAll === 'function'
+      ? await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      : [];
+    const versionBump = previous && currentVersion && CORE.shouldUpdate(previous, currentVersion);
+    if (!windows.length || !versionBump) self.skipWaiting();
   })());
 });
 
@@ -247,7 +258,20 @@ async function checkForUpdate() {
 async function applyUpdate() {
   await ensureReady();
   const next = pendingVersion || await findDownloadedVersion();
-  if (!next) return { type: 'APPLY_FAILED', version: currentVersion };
+  if (!next) {
+    /*
+     * 没有比当前 Worker 更新的缓存，说明这个 Worker 自己已经是目标版本。
+     * 典型场景：新 Worker 已自动激活，旧页面仍拿着更新前的按钮回调。
+     * 只要当前缓存完整，就明确报告 APPLIED，让页面刷新到已激活的新版本；
+     * 旧版页面的 APPLY_UPDATE 处理也能因此正常完成升级。
+     */
+    if (currentVersion && await cacheIsComplete(currentVersion)) {
+      await writeMetaVersion(currentVersion);
+      await deleteOtherCaches(currentVersion);
+      return { type: 'APPLIED', version: currentVersion };
+    }
+    return { type: 'APPLY_FAILED', version: currentVersion };
+  }
   pendingVersion = null;
   currentVersion = next;
   await writeMetaVersion(next);

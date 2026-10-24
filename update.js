@@ -57,6 +57,7 @@
   }
 
   function reloadNow() {
+    if (reloading) return Promise.resolve(true);
     reloading = true;
     location.reload();
     return Promise.resolve(true);
@@ -65,12 +66,27 @@
   function showUpdateBanner(version, apply) {
     if (version && !isNewer(version)) return;
     if (version && version === dismissedVersion) return;
-    if (document.getElementById('updateBanner')) return;
+
+    var existing = document.getElementById('updateBanner');
+    if (existing) {
+      /*
+       * Service Worker 在提示已经显示后完成了激活：把旧按钮的回调换成
+       * 直接刷新，避免它继续等待一个已经不存在的 waiting worker。
+       */
+      existing.__apply = apply;
+      var existingText = existing.querySelector('span');
+      var existingBtn = existing.querySelector('button.primary');
+      if (version && existingText && (!existingBtn || !existingBtn.disabled)) {
+        existingText.textContent = '有新版本可用（' + version + '）';
+      }
+      return;
+    }
 
     var bar = document.createElement('div');
     bar.id = 'updateBanner';
     bar.className = 'update-banner';
     bar.setAttribute('role', 'status');
+    bar.__apply = apply;
 
     var text = document.createElement('span');
     text.textContent = '有新版本可用' + (version ? '（' + version + '）' : '');
@@ -82,7 +98,7 @@
       updateBtn.disabled = true;
       text.textContent = '正在更新，请稍候…';
       Promise.resolve()
-        .then(apply)
+        .then(function () { return bar.__apply ? bar.__apply() : apply(); })
         .then(function (ok) {
           if (ok) return;
           text.textContent = '更新失败，请刷新页面重试';
@@ -108,7 +124,18 @@
     document.body.appendChild(bar);
   }
 
-  /* 已有 waiting worker：直接跳过等待并刷新 */
+  /* 当前 controller 是否已经运行更新版本；是则直接刷新 */
+  function reloadIfControllerNewer() {
+    return ask(navigator.serviceWorker.controller, { type: 'GET_VERSION' }, VERSION_TIMEOUT_MS)
+      .then(function (info) {
+        if (info && info.type === 'VERSION' && info.version && isNewer(info.version)) {
+          return reloadNow();
+        }
+        return false;
+      });
+  }
+
+  /* 已有 waiting worker：请求它跳过等待，并在控制权交接后刷新 */
   function activateWaiting(reg) {
     return new Promise(function (resolve) {
       var settled = false;
@@ -127,14 +154,27 @@
 
       navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
       userRequestedUpdate = true;
-      try {
-        if (!reg.waiting) { finish(false); return; }
-        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-      } catch (e) {
-        finish(false);
+
+      /*
+       * waiting 可能在用户点击前已被激活（自动 skipWaiting、其他标签页关闭等）。
+       * 不能直接报失败：先核对 controller 是否已经是新版本，是则直接刷新。
+       */
+      if (!reg.waiting) {
+        reloadIfControllerNewer().then(finish);
         return;
       }
-      timer = setTimeout(function () { finish(false); }, ACTIVATE_TIMEOUT_MS);
+
+      try {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      } catch (e) {
+        reloadIfControllerNewer().then(finish);
+        return;
+      }
+
+      timer = setTimeout(function () {
+        // controllerchange 可能已经错过：以 controller 实际版本为准
+        reloadIfControllerNewer().then(finish);
+      }, ACTIVATE_TIMEOUT_MS);
     });
   }
 
@@ -153,9 +193,14 @@
   }
 
   function applyWaitingUpdate(reg) {
-    return ask(reg.waiting, { type: 'APPLY_UPDATE' }, ASK_TIMEOUT_MS).then(function (reply) {
-      if (!reply || reply.type !== 'APPLIED') return false;
-      return activateWaiting(reg);
+    var target = reg.waiting || navigator.serviceWorker.controller;
+    return ask(target, { type: 'APPLY_UPDATE' }, ASK_TIMEOUT_MS).then(function (reply) {
+      if (reply && reply.type === 'APPLIED') {
+        if (reply.version && !isNewer(reply.version)) return false;
+        return activateWaiting(reg);
+      }
+      // 旧版 Worker 不支持 APPLY_UPDATE，或 waiting 已被替换
+      return reloadIfControllerNewer();
     });
   }
 
@@ -197,8 +242,13 @@
   function applyServedUpdate() {
     return ask(navigator.serviceWorker.controller, { type: 'APPLY_UPDATE' }, ASK_TIMEOUT_MS)
       .then(function (reply) {
-        if (reply && reply.type === 'APPLIED') return reloadNow();
-        return false;
+        if (reply && reply.type === 'APPLIED') {
+          if (!reply.version || isNewer(reply.version)) return reloadNow();
+          // Worker 已经是页面版本，没有可应用的更新
+          return false;
+        }
+        // 旧版 Worker 未实现 APPLY_UPDATE，或新 Worker 已在点击前激活
+        return reloadIfControllerNewer();
       });
   }
 
