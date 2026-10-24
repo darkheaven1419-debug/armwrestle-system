@@ -107,10 +107,19 @@ function createWorker(stores, server) {
     });
   }
 
+  /* 不需要回复的消息（如 SKIP_WAITING），可指定来源页面 */
+  function sendRaw(data, source) {
+    const waits = [];
+    const event = { data, ports: [], source, waitUntil(p) { waits.push(p); } };
+    (listeners.get('message') || []).forEach((fn) => fn(event));
+    return Promise.all(waits).catch(() => {});
+  }
+
   return {
     install: () => fire('install'),
     activate: () => fire('activate'),
     send,
+    sendRaw,
     sandbox,
   };
 }
@@ -272,7 +281,7 @@ test('有页面打开且版本升级时留在 waiting，等用户点击再激活
 
   server.version = '2026.10.23-4';
   const waiting = createWorker(stores, server);
-  waiting.sandbox.__windows = [{ postMessage() {} }];
+  waiting.sandbox.__windows = [{ postMessage() {}, navigate() { return Promise.resolve(); } }];
   await waiting.install();
 
   // 新 Worker 必须留在 waiting：旧页面手里的 waiting 引用仍然有效
@@ -390,6 +399,89 @@ test('Worker 重启后仍能应用已下载好的更新', async () => {
   assert.equal(applied.version, '2026.10.23-4');
   assert.equal(stores.has('wacaa-pwa-2026.10.23-4'), true);
   assert.equal(stores.has('wacaa-pwa-2026.10.23-3'), false);
+});
+
+function createWindowClient(id, navigations, navigateImpl) {
+  return {
+    id,
+    url: 'http://localhost:8000/?' + id,
+    postMessage() {},
+    navigate(url) {
+      navigations.push(url);
+      return navigateImpl ? navigateImpl(url) : Promise.resolve();
+    },
+  };
+}
+
+/* 让 activate 里“不 await 的导航”跑完 */
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+async function activateVersionBumpWith(windowIds, requesterId) {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const first = createWorker(stores, server);
+  await first.install();
+  await first.activate();
+
+  server.version = '2026.10.23-4';
+  const waiting = createWorker(stores, server);
+  const navigations = [];
+  waiting.sandbox.__windows = windowIds.map((id) => createWindowClient(id, navigations));
+  await waiting.install();
+  if (requesterId) await waiting.sendRaw({ type: 'SKIP_WAITING' }, { id: requesterId });
+  await waiting.activate();
+  await flush();
+  return navigations;
+}
+
+test('版本升级激活后，会自动刷新仍停留在旧代码的其它页面', async () => {
+  const navigations = await activateVersionBumpWith(['clicker', 'other'], 'clicker');
+  // 触发激活的页面会自己刷新，只导航另一个
+  assert.deepEqual(navigations, ['http://localhost:8000/?other']);
+});
+
+test('没有触发页面（浏览器自行激活）时，所有打开页面都会被刷新', async () => {
+  const navigations = await activateVersionBumpWith(['a', 'b'], null);
+  assert.deepEqual(navigations.sort(), ['http://localhost:8000/?a', 'http://localhost:8000/?b']);
+});
+
+test('同版本重新安装激活时不会强制刷新页面', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const first = createWorker(stores, server);
+  await first.install();
+  await first.activate();
+
+  const navigations = [];
+  const sameVersion = createWorker(stores, server);
+  sameVersion.sandbox.__windows = [createWindowClient('a', navigations)];
+  await sameVersion.install();
+  await sameVersion.activate();
+  await flush();
+  assert.deepEqual(navigations, []);
+});
+
+test('页面导航永不完成时，激活本身不能被卡住', async () => {
+  const stores = new Map();
+  const server = createServer('2026.10.23-3');
+  const first = createWorker(stores, server);
+  await first.install();
+  await first.activate();
+
+  server.version = '2026.10.23-4';
+  const waiting = createWorker(stores, server);
+  const navigations = [];
+  // 真实浏览器里 navigate() 要等新页面提交才 resolve，而提交又依赖激活完成
+  const hanging = () => new Promise(() => {});
+  waiting.sandbox.__windows = [createWindowClient('stale', navigations, hanging)];
+  await waiting.install();
+
+  await waiting.activate();
+  await flush();
+
+  // 激活已完成，且确实发起了导航
+  assert.deepEqual(navigations, ['http://localhost:8000/?stale']);
+  assert.equal(await stores.get('wacaa-meta').get('./__wacaa_meta__').json().then((m) => m.version), '2026.10.23-4');
 });
 
 test('离线时检查更新不会崩溃，也不影响当前版本', async () => {

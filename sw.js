@@ -13,7 +13,7 @@ const NAV_TIMEOUT_MS = 4000;
  * 首次安装且网络拿不到 version.js 时的兜底版本。
  * 正常安装一律以服务器上的 version.js 为准；只有改动 sw.js 时才需要同步这个值。
  */
-const FALLBACK_VERSION = '2026.10.23-9';
+const FALLBACK_VERSION = '2026.10.23-10';
 
 const PRECACHE_URLS = [
   './',
@@ -211,9 +211,42 @@ self.addEventListener('install', (event) => {
   })());
 });
 
+/*
+ * 旧页面兼容：新 Worker 激活后，仍停留在旧代码的页面手里拿着的 waiting 引用已经
+ * 失效。此时旧代码的「立即更新」连消息都发不出去（ask(null) 直接判定失败），
+ * 消息层无法挽救，只能在激活后立刻把这些页面导航到新版本。
+ *
+ * 窗口必须极短：从激活到导航只做一次 matchAll，不留任何等待。否则用户在这段时间
+ * 内点击旧按钮，会先看到「更新失败」再被刷新，属于误报。
+ *
+ * 不能 await navigate()：它要等到新页面提交才 resolve，而提交需要本次激活结束后
+ * 由本 Worker 处理导航请求的 fetch 事件。放在 activate 的 waitUntil 里 await 会
+ * 互相等待，页面永久卡在加载中（已用真实浏览器复现）。
+ *
+ * 触发本次激活的页面不需要导航：它已经收到 controllerchange 并自行刷新。
+ */
+let activationRequesterId = null;
+
+function navigateStaleClients() {
+  Promise.resolve()
+    .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
+    .then((windows) => {
+      for (const client of windows) {
+        if (activationRequesterId && client.id === activationRequesterId) continue;
+        try {
+          const nav = client.navigate(client.url);
+          if (nav && typeof nav.catch === 'function') nav.catch(() => {});
+        } catch (e) { /* 页面可能已关闭 */ }
+      }
+    })
+    .catch(() => {});
+}
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     await ensureReady();
+    // 激活前的版本：用来判断这次是不是真正的版本升级
+    const previous = await readMetaVersion();
     // waiting worker 可能已被浏览器回收并重启，优先采用安装时落盘的待激活版本
     const pending = await readPendingVersion();
     if (pending && await cacheIsComplete(pending)) currentVersion = pending;
@@ -229,6 +262,11 @@ self.addEventListener('activate', (event) => {
         client.postMessage({ type: 'SW_ACTIVATED', version: currentVersion });
       });
     } catch (e) { /* 忽略 */ }
+
+    // 版本升级激活后，把仍停留在旧代码的页面导航到新版本（不阻塞激活）
+    if (previous && currentVersion && CORE.shouldUpdate(previous, currentVersion)) {
+      navigateStaleClients();
+    }
   })());
 });
 
@@ -287,6 +325,9 @@ self.addEventListener('message', (event) => {
   const reply = (payload) => { if (port) port.postMessage(payload); };
 
   if (data.type === 'SKIP_WAITING') {
+    // 记住是谁触发的激活：这个页面会自己刷新，不需要再被导航一次
+    const source = event.source;
+    if (source && source.id) activationRequesterId = source.id;
     self.skipWaiting();
     return;
   }
