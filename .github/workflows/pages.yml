@@ -1,0 +1,61 @@
+name: Deploy website to GitHub Pages
+
+# 只从 redesign 分支发布，main 保持不动；也可以在 Actions 页面手动触发。
+on:
+  push:
+    branches:
+      - redesign
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只允许一次 Pages 发布，避免两次部署互相覆盖。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 发布目录白名单：只放网站运行必需的文件。
+      # 不发布 .git、tests、screenshots、CLAUDE.md、README、工作流本身等非运行文件。
+      - name: Stage static site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp index.html style.css manifest.webmanifest version.js sw.js \
+             update-core.js update.js utils.js state.js bracket.js ui.js app.js _site/
+          cp -R icons vendor _site/
+          for f in index.html sw.js version.js manifest.webmanifest style.css \
+                   utils.js state.js bracket.js ui.js app.js update-core.js update.js \
+                   vendor/pinyin-pro.js icons/icon.svg; do
+            test -f "_site/$f" || { echo "missing required file: $f"; exit 1; }
+          done
+          echo "Published files:"
+          find _site -type f | sort
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
