@@ -33,7 +33,8 @@
   --radius-lg: 16px;
   --radius-xl: 20px;
   --topbar-h: 70px;
-  --maxw: 1480px;
+  /* 宽屏内容宽度：吃掉两侧多余留白，同时保留呼吸边距 */
+  --maxw: 1760px;
 
   /* 阴影与动效 */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -913,7 +914,17 @@ input[type="checkbox"] {
 }
 
 /* ==================== 多级别三桌控制台 ==================== */
-.multi-console { gap: 14px; }
+/*
+ * 三桌控制台铺满首屏：高度取“视口 - 顶栏 - .content 上下内边距”。
+ * 内容本身更高时（窄屏、1366×768）以内容为准，页面照常滚动，绝不裁剪。
+ */
+.multi-console {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* 82px = .content 上下内边距 24+56 再加顶栏 1px 分隔线与其下 1px 高光 */
+  min-height: calc(100vh - var(--topbar-h) - 82px);
+}
 
 .multi-head .card-hd {
   padding: 12px 16px;
@@ -926,12 +937,19 @@ input[type="checkbox"] {
 .multi-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1 1 auto;
+  /* 行高至少容纳内容，剩余高度分给三桌，三列始终等高等宽 */
+  grid-auto-rows: minmax(auto, 1fr);
 }
 
 .multi-grid.two-up { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
-.mini-level-card { display: flex; flex-direction: column; }
+.mini-level-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 
 .mini-level-hd {
   flex-direction: column;
@@ -984,6 +1002,7 @@ input[type="checkbox"] {
 .mini-level-bd {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: 10px;
   padding: 10px 12px 12px;
 }
@@ -1012,9 +1031,11 @@ input[type="checkbox"] {
   font-size: 11px;
 }
 
+/* 比赛桌吃掉级别面板的剩余高度：选手区变大，按钮固定在桌底 */
 .mini-stage {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: 8px;
   padding: 8px 10px 10px;
   border: 1px solid var(--line);
@@ -1053,16 +1074,25 @@ input[type="checkbox"] {
   font-size: 11.5px;
 }
 
-.mini-stage-body { display: flex; flex-direction: column; gap: 8px; }
+.mini-stage-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 8px;
+}
 
 .mini-players {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
+  align-items: stretch;
+  flex: 1 1 auto;
   gap: 6px;
 }
 
 .mini-player {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   min-width: 0;
   padding: 5px 4px;
   border: 1px solid var(--line);
@@ -1091,6 +1121,7 @@ input[type="checkbox"] {
 }
 
 .mini-vs {
+  align-self: center;
   color: var(--muted);
   font-size: 10px;
   font-weight: 900;
@@ -1107,6 +1138,13 @@ input[type="checkbox"] {
 
 .mini-fill-btn { min-height: 34px; font-size: 13px; }
 
+/* 未开赛时比赛桌没有对阵：让排桌入口占据桌面高度，而不是在桌底留洞 */
+.mini-details {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+}
+
 .mini-details summary {
   cursor: pointer;
   padding: 5px 2px;
@@ -1121,6 +1159,7 @@ input[type="checkbox"] {
 
 .mini-champion {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -1138,6 +1177,51 @@ input[type="checkbox"] {
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+}
+
+/* 1366 档：只把比赛桌姓名略微放大，仍严格保证一屏看完 */
+@media (min-width: 1280px) and (max-width: 1439px) {
+  .mini-player .name { font-size: 22px; }
+}
+
+/*
+ * 宽屏（≥1440）：三桌控制台按比例放大。
+ * 1366×768 不进入这一档，保留紧凑尺寸，保证项目要求的一屏看完。
+ */
+@media (min-width: 1440px) {
+  .multi-head .card-hd { padding: 10px 16px; }
+
+  .mini-level-hd { gap: 6px; padding: 9px 12px 8px; }
+  .mini-level-name { font-size: 18px; }
+  .mini-level-tools .btn { min-height: 30px; font-size: 12px; }
+
+  .mini-level-bd { gap: 12px; padding: 12px 14px 14px; }
+
+  .multi-grid .matchup-board.compact { gap: 8px; }
+  .multi-grid .matchup-board.compact .matchup-panel { padding: 10px 12px; gap: 5px; }
+  .multi-grid .matchup-board.compact .matchup-label { font-size: 11px; }
+  .multi-grid .matchup-board.compact .matchup-meta { font-size: 11px; }
+  .multi-grid .matchup-board.compact .matchup-name { font-size: 19px; }
+  .multi-grid .matchup-board.compact .matchup-panel[data-matchup="current"] .matchup-name {
+    font-size: 23px;
+  }
+
+  .mini-stage { gap: 10px; padding: 10px 12px 12px; }
+  .mini-stage-hd .btn { min-height: 30px; padding: 3px 12px; font-size: 12px; }
+  .mini-table-no { font-size: 13px; }
+  .mini-player {
+    padding: 12px 10px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
+      var(--surface-2);
+  }
+  /* 选手牌被拉高后，名字同步放大，避免大片深色空白 */
+  .mini-player .name { font-size: clamp(24px, 4.2vh, 46px); line-height: 1.3; }
+  .mini-player-meta .badge { font-size: 11px; padding: 2px 6px; }
+  .mini-vs { font-size: 11px; }
+  .mini-win-actions { gap: 8px; }
+  .mini-win-actions .btn { min-height: 50px; padding: 8px 10px; font-size: 15px; }
+  .mini-fill-btn { min-height: 40px; font-size: 14px; }
 }
 
 @media (max-width: 1279px) {
