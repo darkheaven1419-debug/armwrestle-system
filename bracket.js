@@ -68,8 +68,11 @@
     if (gfPending) { view.nextStatus = 'grandFinal'; return view; }
 
     const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
+    // 展示与引擎使用同一优先级：胜者组在前，组内保持队列原顺序。
+    const ordered = pending.filter((m) => m && m.bracket === 'W')
+      .concat(pending.filter((m) => !m || m.bracket !== 'W'));
     let blocked = null;
-    for (const m of pending) {
+    for (const m of ordered) {
       if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
       if (!isAlive(m.p1) || !isAlive(m.p2)) continue;
       const candidate = {
@@ -169,12 +172,38 @@
     if (eventsOut) eventsOut.push({ type: 'tableAdjusted', count: want });
   };
 
+  /*
+   * 下一场可上场对阵的选择规则（调度优先级唯一实现）：
+   * - 只考虑双方未被任何桌子占用的比赛；
+   * - 胜者组（bracket === 'W'）始终优先于败者组（'L'）；
+   * - 同一优先级内保持 pendingMatches 原顺序，不重排数组、不重写历史。
+   * 返回索引，-1 表示当前没有可上场的比赛。
+   *
+   * 胜者组对阵不会依赖败者组结果（败者组只汇入总决赛），因此“先胜者组”
+   * 不会造成死锁：胜者组全部打完后，败者组仍可继续推进。
+   * 若队列里只有被占用选手的胜者组对阵，则允许先安排可上场的败者组比赛，
+   * 避免空桌等待。
+   */
+  W.selectNextPendingIndex = function selectNextPendingIndex(level, inUse) {
+    const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
+    const used = inUse || new Set();
+    let fallback = -1;
+    for (let i = 0; i < pending.length; i++) {
+      const m = pending[i];
+      if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
+      if (used.has(m.p1) || used.has(m.p2)) continue;
+      if (m.bracket === 'W') return i;
+      if (fallback === -1) fallback = i;
+    }
+    return fallback;
+  };
+
   W.fillTables = function fillTables(level) {
     for (const t of level.tables) {
       if (t.match) continue;
       const inUse = new Set();
       for (const tt of level.tables) { if (tt.match) { inUse.add(tt.match.p1); inUse.add(tt.match.p2); } }
-      const idx = level.pendingMatches.findIndex((m) => !inUse.has(m.p1) && !inUse.has(m.p2));
+      const idx = W.selectNextPendingIndex(level, inUse);
       if (idx === -1) continue;
       const m = level.pendingMatches.splice(idx, 1)[0];
       m.tableNo = t.tableNo; t.match = m;
