@@ -78,6 +78,7 @@
   W.render = function render() {
     const route = W.state.ui.route || { name: 'home' };
     renderTopActions(route); appRoot.innerHTML = '';
+    appRoot.classList.remove('level-fill');
     if (route.name === 'home') renderHome();
     else if (route.name === 'tournament') renderTournament(route.tournamentId);
     else if (route.name === 'level') renderLevel(route.tournamentId, route.levelId);
@@ -426,6 +427,15 @@
     const wrap = el('div', { class: 'grid' }, []);
     wrap.appendChild(renderLevelHeader(tournamentId, tournament, level));
     wrap.appendChild(renderLevelBody(tournamentId, tournament, level));
+    // 进行中的级别：把“标题以下”的剩余视口高度交给比赛工作区，桌面端不提前结束。
+    const live = level.started && !level.finished;
+    const fill = live && level.tables.length > 0;
+    wrap.classList.add('level-page');
+    if (live) wrap.classList.add('level-page-live');
+    if (fill) {
+      wrap.classList.add('level-page-fill');
+      appRoot.classList.add('level-fill');
+    }
     appRoot.appendChild(wrap);
   }
 
@@ -473,7 +483,10 @@
 
   function renderLevelBody(tournamentId, tournament, level) {
     // 已开始：比赛桌优先占据首屏；未开始：先录入选手。
-    const cls = 'level-layout ' + (level.started ? 'is-started' : 'is-waiting') + (level.tables.length >= 3 ? ' three-tables' : '');
+    const tableCount = Math.min(3, Math.max(1, level.tables.length));
+    const cls = 'level-layout ' + (level.started ? 'is-started' : 'is-waiting')
+      + (level.tables.length >= 3 ? ' three-tables' : '')
+      + ` tables-${tableCount}`;
     const parts = level.started ? [renderArena(level), renderPlayerSidebar(level)] : [renderPlayerSidebar(level), renderArena(level)];
     return el('div', { class: cls }, parts);
   }
@@ -813,7 +826,10 @@
           class: 'btn ok block win-btn', 'data-action': 'win', 'data-player-id': p.id,
           'data-table-no': tableNo, 'data-player-name': p.name, 'aria-label': `${p.name} 获胜`,
           onclick: () => { processEvents(W.resolveMatch(level, tableNo, p.id), level); W.saveState(); W.render(); },
-        }, [`${p.name} 获胜`]),
+        }, [
+          el('span', { class: 'win-btn-name' }, [p.name]),
+          el('span', { class: 'win-btn-verb' }, ['获胜']),
+        ]),
       ]);
     };
     return el('div', { class: 'match-panel' }, [

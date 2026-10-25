@@ -674,6 +674,157 @@ input[type="checkbox"] {
   }
 }
 
+/*
+ * 单桌现场模式：标题以下占满可用视口高度。
+ * 空白根因不是桌子本身，而是 .level-layout 的 align-items:start 让左列保持内容高度，
+ * 同时没有从 .content 传下来的高度链。这里把“标题以下”的剩余高度交给比赛区，
+ * 再由 arena-card → table-card → match-panel → duelist 逐层分配。
+ */
+@media (min-width: 981px) {
+  /*
+   * 这里必须给 level 页一个“确定高度”：
+   * .content 虽然是 .app 的 flex:1 项，但 .app 只有 min-height，行高仍会被侧栏内容撑开；
+   * 仅靠 flex/min-height 时，实测布局固定在 918px，1366×768 会整页溢出。
+   * 因此用视口减去顶栏与内容内边距得到确定高度，再交给 grid 的 1fr 行分配。
+   * 54px = 顶栏 1px 分隔线 + .content 上内边距 24 + 底部留白 28 + 1px 取整余量。
+   */
+  #app.level-fill {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding-bottom: 28px;
+  }
+
+  .level-page-fill {
+    height: calc(100vh - var(--topbar-h) - 54px);
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .level-page-fill > .level-layout.is-started {
+    align-items: stretch;
+    min-height: 0;
+  }
+
+  /* 侧栏可以被压缩到分配行高，而不是用自己的长名单把整行撑高。 */
+  .level-page-fill > .level-layout.is-started .player-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+  }
+
+  /* 卡片保持内容高度：空间不足时由侧栏滚动，不能压缩卡片后裁掉按钮。 */
+  .level-page-fill > .level-layout.is-started .player-sidebar > * {
+    flex: 0 0 auto;
+  }
+
+  .level-page-fill .arena-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+  }
+
+  .level-page-fill .arena-card {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .level-page-fill .arena-card > .card-hd,
+  .level-page-fill .table-card > .card-hd,
+  .level-page-fill .next-up-bar {
+    flex: 0 0 auto;
+  }
+
+  .level-page-fill .arena-card > .card-bd {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  /*
+   * 视口/宽度不足以同时容纳所有桌时，让比赛区内部滚动，而不是把选手卡压到
+   * 姓名和比分都放不下（1280×720 三桌实测会压到 83px 高，信息区只剩 1px）。
+   * 指定桌面视口下内容正好等于分配高度，不会出现多余滚动条。
+   */
+  .level-page-fill .arena-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* 224px 是此前 1680×900 下比赛卡的完整内容高度，低于它就应改为滚动。 */
+  .level-page-fill .table-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 224px;
+  }
+
+  .level-page-fill .table-card > .card-bd {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .level-page-fill .table-card .match-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  /*
+   * 选手信息在上半区的视觉中心，获胜按钮固定在各自区域底部。
+   * 卡片长高时增加的是姓名周围的有效留白，而不是把按钮拉成巨型色块。
+   */
+  .level-page-fill .table-card .duelist-info {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 0;
+  }
+}
+
+/*
+ * 三桌且高度充足时，用 2 + 1 分配纵向空间：
+ * 前两桌并排，第三桌横跨整行。这样三张桌都能被看到，又不会把每张桌拉成细长的巨卡。
+ * 1366×768 这类高度紧张的场景仍保持三桌并排，避免内容被压扁。
+ * 864px 是两行各 224px 再加 12px 间距的临界高度；低于它时 2+1 会触发内部滚动。
+ */
+@media (min-width: 981px) and (min-height: 864px) {
+  .level-page-fill .level-layout.tables-3 .arena-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .level-page-fill .level-layout.tables-3 .table-card:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  /* 两张桌在高度充足时上下排布，避免两张窄卡被拉成过高的空塔。 */
+  .level-page-fill .level-layout.tables-2 .arena-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/*
+ * 矮屏三桌：每张桌只有约 85px 宽的按钮，完整姓名会把按钮撑成三四行，
+ * 占掉姓名区高度，导致长姓名顶部被裁。此时按钮只显示“获胜”，
+ * 姓名仍在同一张选手卡的上方，语义和 aria-label 不受影响。
+ */
+@media (min-width: 981px) and (max-height: 839px) {
+  .level-page-fill .level-layout.tables-3 .duelist .win-btn .win-btn-name {
+    display: none;
+  }
+}
+
 /* 紧凑头部：第一行标题/状态/桌数/统计，第二行单行工具条 */
 .level-hero-compact {
   border-color: rgba(227, 178, 91, 0.22);
@@ -1117,6 +1268,8 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.duelist .win-btn .win-btn-name { margin-right: 4px; }
 
 .vs {
   align-self: center;
