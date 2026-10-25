@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const W = window.WACAA || {};
-  const { uid, now, clampInt, getPinyin, safeJsonParse, deepClone, normalizeNameKey, truncateName } = W;
+  const { uid, now, clampInt, getPinyin, safeJsonParse, deepClone, normalizeNameKey, truncateName, shuffle } = W;
 
   const STORAGE_KEY = 'wacaa_armwrestle_v1';
   const BACKUP_KEY = 'wacaa_armwrestle_backup';
@@ -87,7 +87,11 @@
     return {
       id: uid(), name: truncateName(opts.name || '未命名级别', 40) || '未命名级别',
       createdAt: now(), maxTables: clampInt(opts.maxTables ?? 1, 1, 3),
+      // 添加选手后自动打乱种子顺序（默认开启，可随时关闭）
+      autoShuffle: opts.autoShuffle === undefined ? true : !!opts.autoShuffle,
       started: false, finished: false, players: {}, playerOrder: [],
+      // 当前胜者组轮次（首轮为 1）；与败者组 stage 一起构成阶段闸门
+      wRound: 0,
       pendingMatches: [], tables: [], history: [], undoStack: [],
       banners: { top8Shown: false, top3Shown: false, gfShown: false }, grandFinal: null,
     };
@@ -95,7 +99,10 @@
 
   W.createPlayer = function createPlayer(name) {
     const clean = truncateName(name, 30);
-    return { id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0, eliminatedAt: null, placement: null, bracket: 'W' };
+    return {
+      id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0,
+      eliminatedAt: null, eliminatedSeq: null, dropRound: null, lStage: 0, placement: null, bracket: 'W',
+    };
   };
 
   /* ---- 查询辅助 ---- */
@@ -135,7 +142,7 @@
     if (!p || p.losses >= 2) return false;
     if (W.pushUndoSnapshot) W.pushUndoSnapshot(level, 'global');
     p.losses = 2;
-    p.eliminatedAt = now();
+    W.markEliminated(level, p);
     // 清理该选手在队列和桌子上的所有比赛
     const alive = new Set(W.alivePlayers(level).map((x) => x.id));
     level.pendingMatches = level.pendingMatches.filter((m) => alive.has(m.p1) && alive.has(m.p2));
@@ -146,12 +153,37 @@
     return true;
   };
 
+  /*
+   * 记录淘汰顺序。名次以淘汰序号为准，而不是毫秒时间戳：
+   * 快速连续结算（或自动化测试）时，多人可能拿到同一个 Date.now()，
+   * 只按时间排序会让同毫秒淘汰者的名次变成未定义顺序。序号在级别内单调递增。
+   */
+  W.markEliminated = function markEliminated(level, p) {
+    if (!p) return;
+    if (!p.eliminatedAt) p.eliminatedAt = now();
+    if (typeof p.eliminatedSeq === 'number' && Number.isFinite(p.eliminatedSeq)) return;
+    let maxSeq = 0;
+    for (const x of Object.values(level.players || {})) {
+      const s = x && x.eliminatedSeq;
+      if (typeof s === 'number' && Number.isFinite(s) && s > maxSeq) maxSeq = s;
+    }
+    p.eliminatedSeq = maxSeq + 1;
+  };
+
   /* ---- 排名计算 ---- */
   W.computePlacements = function computePlacements(level) {
     const ps = Object.values(level.players);
     const total = ps.length;
     for (const p of ps) p.placement = null;
-    const eliminated = ps.filter((p) => p.eliminatedAt).sort((a, b) => a.eliminatedAt - b.eliminatedAt);
+    const seqOf = (p) => (typeof p.eliminatedSeq === 'number' && Number.isFinite(p.eliminatedSeq) ? p.eliminatedSeq : null);
+    const eliminated = ps.filter((p) => p.eliminatedAt).sort((a, b) => {
+      const sa = seqOf(a), sb = seqOf(b);
+      if (sa != null && sb != null) return sa - sb;
+      // 只有旧数据才会缺序号（加载时会补齐），时间戳兜底保持原行为
+      if (sa != null) return -1;
+      if (sb != null) return 1;
+      return a.eliminatedAt - b.eliminatedAt;
+    });
     eliminated.forEach((p, idx) => { p.placement = total - idx; });
     if (level.finished) {
       if (level.grandFinal?.completed && level.grandFinal.winnerId) {
@@ -162,6 +194,73 @@
         if (alive.length === 1) alive[0].placement = 1;
       }
     }
+  };
+
+  /*
+   * 名次展示用的中文序数。名次本身只来自上面的 computePlacements，
+   * 这里只负责把 1/2/3 与 4 之后的数字翻译成界面文案。
+   */
+  const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  const CN_UNITS = ['', '十', '百', '千'];
+  function chineseNumeral(n) {
+    const digits = String(n).split('').map(Number);
+    let out = '';
+    let pendingZero = false;
+    for (let i = 0; i < digits.length; i++) {
+      const d = digits[i];
+      if (d === 0) {
+        if (out) pendingZero = true;
+        continue;
+      }
+      if (pendingZero) { out += '零'; pendingZero = false; }
+      out += CN_DIGITS[d] + CN_UNITS[digits.length - i - 1];
+    }
+    return out.replace(/^一十/, '十');
+  }
+
+  W.rankingLabel = function rankingLabel(place) {
+    const n = Number(place);
+    if (!Number.isInteger(n) || n < 1) return '未决出';
+    if (n === 1) return '🥇 冠军';
+    if (n === 2) return '🥈 亚军';
+    if (n === 3) return '🥉 季军';
+    // 当前参赛人数上限远低于一万；超出时仍给出可读文案，绝不返回 undefined。
+    if (n >= 10000) return `第${n}名`;
+    return `第${chineseNumeral(n)}名`;
+  };
+
+  /*
+   * 完整名次表：每个名次位置都先占位。
+   * - 只有 computePlacements 已写入 placement 的选手才算“已确定”；
+   * - 存活选手没有 placement，因此不会被当成临时名次显示；
+   * - 行数始终等于当前参赛人数，未决出的位置保留为空位。
+   */
+  W.getRankingView = function getRankingView(level) {
+    if (!level || !level.players) return [];
+    W.computePlacements(level);
+    const players = Object.values(level.players);
+    const total = players.length;
+    const byPlace = new Map();
+    for (const p of players) {
+      if (Number.isInteger(p.placement) && p.placement >= 1 && p.placement <= total) {
+        byPlace.set(p.placement, p);
+      }
+    }
+    const rows = [];
+    for (let place = 1; place <= total; place++) {
+      const p = byPlace.get(place);
+      rows.push({
+        place,
+        label: W.rankingLabel(place),
+        status: p ? 'decided' : 'pending',
+        playerId: p ? p.id : null,
+        name: p ? p.name : null,
+        pinyin: p ? (p.pinyin || '') : '',
+        losses: p ? p.losses : null,
+        withdrawn: p ? W.isWithdrawn(level, p) : false,
+      });
+    }
+    return rows;
   };
 
   /* ---- 导入校验与归一化 ---- */
@@ -205,6 +304,9 @@
       pinyin: typeof raw.pinyin === 'string' ? raw.pinyin : getPinyin(name || '未命名'),
       losses: clampInt(numOr(raw.losses, 0), 0, 2),
       eliminatedAt: numOr(raw.eliminatedAt, null),
+      eliminatedSeq: typeof raw.eliminatedSeq === 'number' && Number.isFinite(raw.eliminatedSeq) ? raw.eliminatedSeq : null,
+      dropRound: typeof raw.dropRound === 'number' && Number.isFinite(raw.dropRound) ? raw.dropRound : null,
+      lStage: typeof raw.lStage === 'number' && Number.isFinite(raw.lStage) ? clampInt(raw.lStage, 0, 999) : null,
       placement: typeof raw.placement === 'number' && Number.isFinite(raw.placement) ? raw.placement : null,
       bracket,
     };
@@ -221,6 +323,8 @@
       p1: raw.p1,
       p2: raw.p2,
       tableNo: typeof raw.tableNo === 'number' ? raw.tableNo : null,
+      round: bracket === 'W' && typeof raw.round === 'number' && Number.isFinite(raw.round) ? raw.round : null,
+      stage: bracket === 'L' && typeof raw.stage === 'number' && Number.isFinite(raw.stage) ? raw.stage : null,
     };
   }
 
@@ -231,6 +335,8 @@
     level.createdAt = numOr(raw.createdAt, now());
     level.started = boolOr(raw.started, false);
     level.finished = boolOr(raw.finished, false);
+    // 旧版导出没有 autoShuffle 字段：保持“默认开启”的既有行为
+    level.autoShuffle = boolOr(raw.autoShuffle, true);
     level.banners = {
       top8Shown: !!raw.banners?.top8Shown,
       top3Shown: !!raw.banners?.top3Shown,
@@ -247,6 +353,19 @@
     }
     if (skippedPlayers) warnings.push(`「${level.name}」有 ${skippedPlayers} 名选手数据无效，已跳过`);
     level.players = players;
+
+    /*
+     * 旧版导出没有淘汰序号：按原有的淘汰时间顺序补齐。
+     * 这样同一毫秒内淘汰的选手也保持升级前的排列，之后的名次不再随机。
+     */
+    let maxSeq = 0;
+    for (const p of Object.values(players)) {
+      if (typeof p.eliminatedSeq === 'number' && p.eliminatedSeq > maxSeq) maxSeq = p.eliminatedSeq;
+    }
+    const missingSeq = Object.values(players)
+      .filter((p) => p.eliminatedAt && typeof p.eliminatedSeq !== 'number')
+      .sort((a, b) => a.eliminatedAt - b.eliminatedAt);
+    for (const p of missingSeq) p.eliminatedSeq = ++maxSeq;
 
     const order = [];
     const seen = new Set();
@@ -275,6 +394,10 @@
       warnings.push(`「${level.name}」有 ${rawPending.length - level.pendingMatches.length} 场待赛对阵无效，已移除`);
     }
 
+    /*
+     * 事件历史先归一化，下面的败者组进度迁移要用它恢复已完成阶段。
+     * round/stage 是新增元数据；旧历史缺失时保留 null，不伪造轮次。
+     */
     level.history = (Array.isArray(raw.history) ? raw.history : [])
       .filter((h) => isObj(h) && players[h.p1] && players[h.p2] && players[h.winnerId] && players[h.loserId])
       .map((h) => ({
@@ -283,7 +406,77 @@
         tableNo: numOr(h.tableNo, null),
         bracket: h.bracket === 'L' ? 'L' : 'W',
         p1: h.p1, p2: h.p2, winnerId: h.winnerId, loserId: h.loserId,
+        round: h.bracket !== 'L' && Number.isFinite(h.round) ? Math.floor(h.round) : null,
+        stage: h.bracket === 'L' && Number.isFinite(h.stage) ? Math.max(1, Math.floor(h.stage)) : null,
       }));
+
+    /*
+     * 阶段元数据迁移（波次模型）：
+     * - 旧数据没有 wRound/round：所有已存在的 W 比赛视为第 1 轮；
+     * - 旧数据没有 dropRound：已进入败者组（或已负场）的选手按当前轮次补齐；
+     * - 新增 lStage：选手已经完成的败者组阶段数，从 dropRound 与历史 L 胜场推导；
+     * - 旧 L 对阵没有 stage：按双方 lStage 计算“下一个阶段”；
+     * - 旧版动态败者组可能把不同阶段的选手混在同一场，且全部卡在候场。
+     *   这类旧数据统一迁到“最早未完成阶段”，避免新闸门把旧数据锁死。
+     */
+    const hadLoserProgress = Object.values(players).some((p) => Number.isFinite(p.lStage));
+    const allMatches = level.pendingMatches.slice();
+    for (const t of level.tables) if (t.match) allMatches.push(t.match);
+    let maxWRound = 0;
+    for (const m of allMatches) {
+      if (m.bracket !== 'W') continue;
+      if (!Number.isFinite(m.round)) m.round = 1;
+      if (m.round > maxWRound) maxWRound = m.round;
+    }
+    level.wRound = Math.max(
+      clampInt(numOr(raw.wRound, 0), 0, 999),
+      maxWRound,
+      level.started ? 1 : 0,
+    );
+    for (const p of Object.values(players)) {
+      if (p.dropRound == null && (p.bracket === 'L' || p.losses > 0)) {
+        p.dropRound = level.wRound || 1;
+      }
+      if (!Number.isFinite(p.lStage)) {
+        p.lStage = p.bracket === 'L' || p.losses > 0
+          ? Math.max(0, (p.dropRound || 1) - 1)
+          : 0;
+      }
+    }
+    // 历史中的 L 胜场表示该选手已经完成对应阶段
+    for (const h of level.history) {
+      if (h.bracket !== 'L' || !Number.isFinite(h.stage)) continue;
+      const winner = players[h.winnerId];
+      if (winner) winner.lStage = Math.max(winner.lStage, h.stage);
+    }
+    const liveLoserMatches = allMatches.filter((m) => m.bracket === 'L');
+    for (const m of liveLoserMatches) {
+      if (!Number.isFinite(m.stage)) {
+        const a = players[m.p1].lStage, b = players[m.p2].lStage;
+        m.stage = Math.max(1, Math.min(a, b) + 1);
+      }
+    }
+    if (!hadLoserProgress && liveLoserMatches.length) {
+      let minL = Infinity;
+      for (const p of W.bracketPlayers(level, 'L')) {
+        if (p.lStage < minL) minL = p.lStage;
+      }
+      const repairStage = Number.isFinite(minL) ? Math.max(1, minL + 1) : 1;
+      for (const m of liveLoserMatches) {
+        m.stage = repairStage;
+        for (const id of [m.p1, m.p2]) {
+          const p = players[id];
+          if (p) p.lStage = Math.min(p.lStage, repairStage - 1);
+        }
+      }
+    }
+    for (const m of liveLoserMatches) {
+      // 已在某阶段中的选手必然已经完成前一阶段
+      for (const id of [m.p1, m.p2]) {
+        const p = players[id];
+        if (p) p.lStage = Math.max(p.lStage, m.stage - 1);
+      }
+    }
 
     level.undoStack = (Array.isArray(raw.undoStack) ? raw.undoStack : [])
       .filter(isObj)
@@ -395,6 +588,45 @@
       added++;
     }
     return { added, dupes };
+  };
+
+  /* 只打乱尚未开赛的参赛顺序；比赛开始后一律拒绝，避免影响已排定对阵 */
+  W.shufflePlayerOrder = function shufflePlayerOrder(level) {
+    if (!level || level.started) return false;
+    level.playerOrder = shuffle(level.playerOrder.slice());
+    return true;
+  };
+
+  /*
+   * 批量添加选手；整批添加成功后，若未关闭 autoShuffle，只打乱一次。
+   * 返回 { added, dupes, shuffled }，方便 UI 给出准确反馈。
+   */
+  W.addPlayers = function addPlayers(level, text) {
+    if (!level || level.started) return { added: 0, dupes: [], shuffled: false };
+    const result = W.batchAddPlayers(level, text);
+    let shuffled = false;
+    if (result.added > 0 && level.autoShuffle !== false) {
+      shuffled = W.shufflePlayerOrder(level);
+    }
+    return { added: result.added, dupes: result.dupes, shuffled };
+  };
+
+  /*
+   * 独立设置某级别的桌数上限（1~3）。
+   * - 未开始：只改上限，下次开始比赛按新上限建桌。
+   * - 已开始：安全调整桌子数量，多余桌上的比赛退回候场队列，不会清空、
+   *   判负或改写任何已完成记录；已结束的级别只记录设置。
+   */
+  W.setTableLimit = function setTableLimit(level, value) {
+    if (!level) return null;
+    const prev = clampInt(level.maxTables ?? 1, 1, 3);
+    const limit = clampInt(value, 1, 3);
+    level.maxTables = limit;
+    if (level.started && !level.finished && W.adjustTablesToAutoCount) {
+      W.adjustTablesToAutoCount(level, []);
+      W.fillTables(level);
+    }
+    return { prev, limit };
   };
 
   W.deletePlayer = function deletePlayer(level, playerId) {
