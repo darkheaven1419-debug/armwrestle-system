@@ -20,6 +20,7 @@ const W = window.WACAA || {};
       l.undoStack ||= [];
       l.banners ||= { top8Shown: false, top3Shown: false, gfShown: false };
       if (l.maxTables == null) l.maxTables = 3;
+      if (l.autoShuffle == null) l.autoShuffle = true;
     }
   }
 })();

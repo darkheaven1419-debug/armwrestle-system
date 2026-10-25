@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const W = window.WACAA || {};
-  const { uid, now, clampInt, getPinyin, safeJsonParse, deepClone, normalizeNameKey, truncateName } = W;
+  const { uid, now, clampInt, getPinyin, safeJsonParse, deepClone, normalizeNameKey, truncateName, shuffle } = W;
 
   const STORAGE_KEY = 'wacaa_armwrestle_v1';
   const BACKUP_KEY = 'wacaa_armwrestle_backup';
@@ -87,6 +87,8 @@
     return {
       id: uid(), name: truncateName(opts.name || '未命名级别', 40) || '未命名级别',
       createdAt: now(), maxTables: clampInt(opts.maxTables ?? 1, 1, 3),
+      // 添加选手后自动打乱种子顺序（默认开启，可随时关闭）
+      autoShuffle: opts.autoShuffle === undefined ? true : !!opts.autoShuffle,
       started: false, finished: false, players: {}, playerOrder: [],
       pendingMatches: [], tables: [], history: [], undoStack: [],
       banners: { top8Shown: false, top3Shown: false, gfShown: false }, grandFinal: null,
@@ -231,6 +233,8 @@
     level.createdAt = numOr(raw.createdAt, now());
     level.started = boolOr(raw.started, false);
     level.finished = boolOr(raw.finished, false);
+    // 旧版导出没有 autoShuffle 字段：保持“默认开启”的既有行为
+    level.autoShuffle = boolOr(raw.autoShuffle, true);
     level.banners = {
       top8Shown: !!raw.banners?.top8Shown,
       top3Shown: !!raw.banners?.top3Shown,
@@ -395,6 +399,45 @@
       added++;
     }
     return { added, dupes };
+  };
+
+  /* 只打乱尚未开赛的参赛顺序；比赛开始后一律拒绝，避免影响已排定对阵 */
+  W.shufflePlayerOrder = function shufflePlayerOrder(level) {
+    if (!level || level.started) return false;
+    level.playerOrder = shuffle(level.playerOrder.slice());
+    return true;
+  };
+
+  /*
+   * 批量添加选手；整批添加成功后，若未关闭 autoShuffle，只打乱一次。
+   * 返回 { added, dupes, shuffled }，方便 UI 给出准确反馈。
+   */
+  W.addPlayers = function addPlayers(level, text) {
+    if (!level || level.started) return { added: 0, dupes: [], shuffled: false };
+    const result = W.batchAddPlayers(level, text);
+    let shuffled = false;
+    if (result.added > 0 && level.autoShuffle !== false) {
+      shuffled = W.shufflePlayerOrder(level);
+    }
+    return { added: result.added, dupes: result.dupes, shuffled };
+  };
+
+  /*
+   * 独立设置某级别的桌数上限（1~3）。
+   * - 未开始：只改上限，下次开始比赛按新上限建桌。
+   * - 已开始：安全调整桌子数量，多余桌上的比赛退回候场队列，不会清空、
+   *   判负或改写任何已完成记录；已结束的级别只记录设置。
+   */
+  W.setTableLimit = function setTableLimit(level, value) {
+    if (!level) return null;
+    const prev = clampInt(level.maxTables ?? 1, 1, 3);
+    const limit = clampInt(value, 1, 3);
+    level.maxTables = limit;
+    if (level.started && !level.finished && W.adjustTablesToAutoCount) {
+      W.adjustTablesToAutoCount(level, []);
+      W.fillTables(level);
+    }
+    return { prev, limit };
   };
 
   W.deletePlayer = function deletePlayer(level, playerId) {
