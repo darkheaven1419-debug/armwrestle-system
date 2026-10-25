@@ -13,7 +13,7 @@ const NAV_TIMEOUT_MS = 4000;
  * 首次安装且网络拿不到 version.js 时的兜底版本。
  * 正常安装一律以服务器上的 version.js 为准；只有改动 sw.js 时才需要同步这个值。
  */
-const FALLBACK_VERSION = '2026.10.25-3';
+const FALLBACK_VERSION = '2026.10.25-4';
 
 const PRECACHE_URLS = [
   './',

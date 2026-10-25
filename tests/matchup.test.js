@@ -73,34 +73,36 @@ test('结算一场后，原来的下一组进入当前对阵，新的下一组�
   assert.equal(after.next.matchId, level.pendingMatches[0].id);
 });
 
-test('胜者组/败者组标签与真实队列一致', () => {
+test('胜者组/败者组标签与真实波次一致：W1 → W2 → L1', () => {
   const { W } = createApp();
   const { level } = makeLevel(W, 4);
   startLevel(W, level);
 
-  // 先打完两场胜者组首轮，败者组对阵才会进入队列
+  // 先打完两场胜者组首轮；按波次规则，下一波仍是 W2，而不是 L1
   for (let i = 0; i < 2; i++) {
     const table = level.tables.find((t) => t.match);
     assert.ok(table, `第 ${i + 1} 场应能分配到桌子`);
     assert.equal(table.match.bracket, 'W');
+    assert.equal(table.match.round, 1);
     W.resolveMatch(level, table.tableNo, table.match.p1);
     W.generateMatchesIfNeeded(level);
     W.fillTables(level);
     W.finalizeIfDone(level);
   }
 
-  const view = W.getMatchupView(level);
+  let view = W.getMatchupView(level);
   assert.equal(view.current[0].bracket, 'W');
-  assert.equal(view.next.bracket, 'L');
-  assert.equal(view.next.matchId, level.pendingMatches[0].id);
+  assert.equal(level.tables.find((t) => t.match).match.round, 2, 'W1 完成后进入 W2');
 
-  // 结算胜者组后，败者组对阵上场
+  // 结算 W2 后，败者组 L1 才上场
   const table = level.tables.find((t) => t.match);
   W.resolveMatch(level, table.tableNo, table.match.p1);
   W.generateMatchesIfNeeded(level);
   W.fillTables(level);
   W.finalizeIfDone(level);
-  assert.equal(W.getMatchupView(level).current[0].bracket, 'L');
+  view = W.getMatchupView(level);
+  assert.equal(view.current[0].bracket, 'L');
+  assert.equal(level.tables.find((t) => t.match).match.stage, 1);
 });
 
 test('轮空选手不会出现在当前或下一组', () => {

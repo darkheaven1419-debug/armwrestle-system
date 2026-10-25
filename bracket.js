@@ -19,43 +19,82 @@
     return level.pendingMatches.some((m) => m.bracket === bracket);
   }
 
-  /* 场上是否还有某个组别的比赛（用于“整轮完成才开下一轮”） */
+  /* 场上是否还有某个组别的比赛（用于整轮/整阶段推进） */
   function hasTableMatchForBracket(level, bracket) {
     return level.tables.some((t) => t.match && t.match.bracket === bracket);
   }
 
-  /*
-   * 败者组对阵所属阶段 = 双方落入败者组时所处胜者组轮次的较大值。
-   * 例：首轮负者之间的比赛属于阶段 1；第二轮负者加入后属于阶段 2。
-   */
-  function loserStageOf(level, m) {
-    if (typeof m.stage === 'number' && Number.isFinite(m.stage)) return m.stage;
-    const dropRoundOf = (id) => {
-      const p = level.players && level.players[id];
-      const r = p && p.dropRound;
-      return typeof r === 'number' && Number.isFinite(r) ? r : null;
-    };
-    const a = dropRoundOf(m.p1);
-    const b = dropRoundOf(m.p2);
-    if (a == null && b == null) return Math.max(1, level.wRound || 1);
-    return Math.max(a == null ? 1 : a, b == null ? 1 : b);
+  function pendingOf(level) {
+    return Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
+  }
+
+  function matchesOnTables(level) {
+    const out = [];
+    for (const t of level.tables || []) if (t && t.match) out.push(t.match);
+    return out;
+  }
+
+  function allLiveMatches(level) {
+    return pendingOf(level).concat(matchesOnTables(level));
   }
 
   /*
-   * 阶段闸门：败者组比赛只有在它对应阶段的胜者组比赛全部打完后才能开赛。
-   * “未完成”包括仍在候场、以及仍在任何桌子上的胜者组比赛；不能只检查候场
-   * 队列里有没有双方空闲的胜者组，因为同阶段的 W 可能正占着别的桌。
-   * 旧数据缺少轮次时按 1 处理：宁可多等一轮，也不提前开打。
+   * 选手的败者组进度：
+   * - 从 W 第 r 轮落入败者组时，dropRound=r，lStage=r-1；
+   * - 赢下 L 第 s 阶段后，lStage=s；
+   * - 因此“下一阶段”= 存活败者组选手中最小的 lStage + 1。
+   */
+  function playerLoserStage(level, id) {
+    const p = level.players && level.players[id];
+    if (!p) return 0;
+    if (typeof p.lStage === 'number' && Number.isFinite(p.lStage)) {
+      return Math.max(0, Math.floor(p.lStage));
+    }
+    const drop = p.dropRound;
+    return Math.max(0, (typeof drop === 'number' && Number.isFinite(drop) ? drop : 1) - 1);
+  }
+
+  function loserStageOf(level, m) {
+    if (typeof m.stage === 'number' && Number.isFinite(m.stage)) {
+      return Math.max(1, Math.floor(m.stage));
+    }
+    const a = playerLoserStage(level, m.p1);
+    const b = playerLoserStage(level, m.p2);
+    return Math.max(1, Math.min(a, b) + 1);
+  }
+
+  W.minLoserStage = function minLoserStage(level) {
+    const stages = W.bracketPlayers(level, 'L').map((p) => playerLoserStage(level, p.id));
+    return stages.length ? Math.min(...stages) : 0;
+  };
+
+  /*
+   * 波次闸门：L 第 s 阶段必须同时满足
+   * 1) 前一个 L 阶段（s-1）已经完成；
+   * 2) 对应波次的 W 比赛全部完成——S1 等 W2，S2 等 W3，依此类推；
+   * 3) 如果 W 组还有出线资格，W 第 s+1 轮必须已经生成并完成。
+   * “完成”包括候场队列和所有桌子，不能只看某一方是否空闲。
+   * W 被淘汰到只剩 1 人时不存在下一轮 W，条件 3 自动成立。
    */
   W.isLoserStageReady = function isLoserStageReady(level, m) {
     if (!m || m.bracket !== 'L') return true;
     const stage = loserStageOf(level, m);
-    if (stage == null) return false;
+    if (!Number.isFinite(stage) || stage < 1) return false;
+    if (W.minLoserStage(level) !== stage - 1) return false;
+    const wAlive = W.bracketPlayers(level, 'W').length;
+    if (wAlive >= 2 && (level.wRound || 0) < stage + 1) return false;
+    const barrier = stage + 1;
     const blocks = (x) => !!x && x.bracket === 'W'
-      && (typeof x.round !== 'number' || !Number.isFinite(x.round) || x.round <= stage);
-    if (level.pendingMatches.some(blocks)) return false;
-    return !level.tables.some((t) => blocks(t.match));
+      && (typeof x.round !== 'number' || !Number.isFinite(x.round) || x.round <= barrier);
+    if (pendingOf(level).some(blocks)) return false;
+    return !matchesOnTables(level).some(blocks);
   };
+
+  /* 当前是否有败者组波次正在进行（桌上有 L，或队列里有已就绪的 L）。 */
+  function hasActiveLoserWave(level) {
+    if (matchesOnTables(level).some((m) => m.bracket === 'L')) return true;
+    return pendingOf(level).some((m) => m && m.bracket === 'L' && W.isLoserStageReady(level, m));
+  }
 
   /*
    * 只读对阵视图（不修改 level）：
@@ -106,17 +145,23 @@
     if (gfPending) { view.nextStatus = 'grandFinal'; return view; }
 
     const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
-    // 展示与引擎使用同一优先级：胜者组在前，组内保持队列原顺序。
-    const ordered = pending.filter((m) => m && m.bracket === 'W')
-      .concat(pending.filter((m) => !m || m.bracket !== 'W'));
+    /*
+     * 展示与引擎共用同一波次顺序：
+     * - 败者组波次进行中，只展示已就绪的 L，不再展示下一波 W；
+     * - 否则先展示 W，再展示已就绪的 L。
+     * 未就绪的 L 永远不会成为“下一组”。
+     */
+    const loserWave = hasActiveLoserWave(level);
+    const ordered = [];
+    if (!loserWave) ordered.push(...pending.filter((m) => m && m.bracket === 'W'));
+    ordered.push(...pending.filter((m) => m && m.bracket === 'L' && W.isLoserStageReady(level, m)));
     let blocked = null;
     for (const m of ordered) {
       if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
       if (!isAlive(m.p1) || !isAlive(m.p2)) continue;
-      // 阶段未到的败者组不会成为“下一组”
-      if (!W.isLoserStageReady(level, m)) continue;
       const candidate = {
         source: 'pending', tableNo: null, bracket: m.bracket,
+        round: m.round ?? null, stage: m.stage ?? null,
         p1: m.p1, p2: m.p2, matchId: m.id || null, waiting: false,
       };
       if (inUse.has(m.p1) || inUse.has(m.p2)) {
@@ -149,70 +194,143 @@
 
     W.adjustTablesToAutoCount(level, events);
     if (level.grandFinal && !level.grandFinal.completed) return events;
-    const alive = W.alivePlayers(level);
-    if (alive.length <= 1) { W.finalizeIfDone(level); return events; }
-    const wAlive = W.bracketPlayers(level, 'W');
-    const lAlive = W.bracketPlayers(level, 'L');
-    if (wAlive.length === 1 && lAlive.length === 1 && !level.grandFinal) {
-      W.setupGrandFinal(level, wAlive[0].id, lAlive[0].id);
-      events.push({ type: 'grandFinal', wId: wAlive[0].id, lId: lAlive[0].id });
-      return events;
-    }
-    /*
-     * 胜者组按整轮推进：本轮还有比赛在桌上时不生成下一轮。
-     * 这样“当前阶段”有确定边界，败者组的阶段闸门才有意义；
-     * 只是推迟生成，桌上比赛结束后必然继续，不会死锁。
-     */
-    if (!hasPendingForBracket(level, 'W') && !hasTableMatchForBracket(level, 'W')) {
-      const result = createBracketPairings(level, 'W');
-      if (result.created > 0) events.push({ type: 'matchesGenerated', bracket: 'W', count: result.created });
-      // M1: 轮空通知
-      if (result.byeName) events.push({ type: 'bye', name: result.byeName });
-    }
-    if (!hasPendingForBracket(level, 'L')) {
-      const result = createBracketPairings(level, 'L');
-      if (result.created > 0) events.push({ type: 'matchesGenerated', bracket: 'L', count: result.created });
-      if (result.byeName) events.push({ type: 'bye', name: result.byeName });
-    }
+    if (W.alivePlayers(level).length <= 1) { W.finalizeIfDone(level); return events; }
+    if (trySetupGrandFinal(level, events)) return events;
+
+    scheduleWaves(level, events);
+    trySetupGrandFinal(level, events);
     return events;
   };
 
-  function createBracketPairings(level, bracket) {
+  function trySetupGrandFinal(level, events) {
+    if (level.grandFinal) return true;
+    const wAlive = W.bracketPlayers(level, 'W');
+    const lAlive = W.bracketPlayers(level, 'L');
+    if (wAlive.length !== 1 || lAlive.length !== 1) return false;
+    W.setupGrandFinal(level, wAlive[0].id, lAlive[0].id);
+    events.push({ type: 'grandFinal', wId: wAlive[0].id, lId: lAlive[0].id });
+    return true;
+  }
+
+  /*
+   * 波次调度（唯一实现）：
+   *   W1 -> W2 -> L1 -> W3 -> L2 -> W4 -> L3 -> ...
+   * 每个时刻只允许一个组别的比赛处于“候场/桌上”。
+   * - 当前波次的 W 未全部完成：不生成、也不允许 L 上桌；
+   * - 当前波次的 L 未全部完成：不生成下一轮 W；
+   * - W 只剩 1 人后，L 继续按阶段推进到只剩 1 人，再进总决赛。
+   * 这样 S1 必须在 W2 全部结束后才开始；S2 必须在 W3 全部结束后才开始。
+   */
+  function scheduleWaves(level, events) {
+    for (let guard = 0; guard < 200; guard += 1) {
+      cleanupPendingMatches(level);
+      if (level.finished) return;
+      if (trySetupGrandFinal(level, events)) return;
+
+      const live = allLiveMatches(level);
+      // 任一 W 比赛未完成，当前 W 波次就不能结束
+      if (live.some((m) => m.bracket === 'W')) return;
+      // L 波次进行中（桌上有 L，或队列里有已就绪的 L）
+      if (matchesOnTables(level).some((m) => m.bracket === 'L')) return;
+      if (pendingOf(level).some((m) => m.bracket === 'L' && W.isLoserStageReady(level, m))) return;
+
+      const wAlive = W.bracketPlayers(level, 'W').length;
+      const lAlive = W.bracketPlayers(level, 'L').length;
+      if (wAlive + lAlive <= 1) return;
+
+      const wr = Math.max(0, level.wRound || 0);
+      const minL = W.minLoserStage(level);
+      let action;
+      if (wr <= 1) {
+        // 开局先完成 W1、W2，然后才进入 L1
+        action = wAlive >= 2 ? createWinnerPairings(level) : createLoserStagePairings(level, minL + 1);
+      } else if (minL < wr - 1) {
+        // 当前 W 波次已完成，但对应的 L 阶段尚未完成：先打 L
+        action = createLoserStagePairings(level, minL + 1);
+      } else if (wAlive >= 2) {
+        // L 阶段已完成，进入下一轮 W
+        action = createWinnerPairings(level);
+      } else {
+        // W 已无下一轮，L 继续收尾
+        action = createLoserStagePairings(level, minL + 1);
+      }
+
+      if (!action) return;
+      if (action.created > 0) {
+        events.push({ type: 'matchesGenerated', bracket: action.bracket, count: action.created });
+      }
+      if (action.byeName) events.push({ type: 'bye', name: action.byeName });
+      // 只有轮空推进、没有生成比赛时，继续循环；否则下一轮循环会因
+      // “有比赛未完成”而自然停下。
+      if (action.created === 0 && action.advanced === 0) return;
+    }
+  }
+
+  function createWinnerPairings(level) {
     const used = W.participantsInUse(level);
-    const candidates = W.bracketPlayers(level, bracket).map((p) => p.id).filter((id) => !used.has(id));
-    let byeName = null;
-    if (candidates.length < 2) return { created: 0, byeName: null };
+    const candidates = W.bracketPlayers(level, 'W').map((p) => p.id).filter((id) => !used.has(id));
+    if (candidates.length < 2) return { created: 0, byeName: null, advanced: 0, bracket: 'W' };
     const pool = shuffle(candidates);
+    let byeName = null;
     if (pool.length % 2 === 1) {
       const byeIdx = Math.floor(Math.random() * pool.length);
       const byeId = pool.splice(byeIdx, 1)[0];
       byeName = level.players[byeId]?.name || null;
     }
-    // 新一批胜者组比赛就是新的一轮；败者组阶段由双方 dropRound 计算
-    let round = null;
-    if (bracket === 'W') {
-      level.wRound = Math.max(1, level.wRound || 1) + 1;
-      round = level.wRound;
+    const round = Math.max(1, level.wRound || 0) + 1;
+    level.wRound = round;
+    let created = 0;
+    for (let i = 0; i < pool.length; i += 2) {
+      const p1 = pool[i], p2 = pool[i + 1];
+      if (!p1 || !p2) continue;
+      level.pendingMatches.push({
+        id: uid(), createdAt: now(), bracket: 'W', round, p1, p2, tableNo: null,
+      });
+      created += 1;
+    }
+    return { created, byeName, advanced: 0, bracket: 'W' };
+  }
+
+  /*
+   * 只生成当前 L 阶段：lStage === stage-1 的选手（上一阶段胜者 + 本轮
+   * 刚从 W 落下来的选手）。人数为奇数时，一人轮空并直接推进到下一阶段。
+   */
+  function createLoserStagePairings(level, stage) {
+    const used = W.participantsInUse(level);
+    const candidates = W.bracketPlayers(level, 'L')
+      .filter((p) => {
+        const drop = p.dropRound;
+        return playerLoserStage(level, p.id) === stage - 1
+          && (drop == null || drop <= stage)
+          && !used.has(p.id);
+      })
+      .map((p) => p.id);
+    if (candidates.length === 0) {
+      return { created: 0, byeName: null, advanced: 0, bracket: 'L', stage };
+    }
+    const pool = shuffle(candidates);
+    let byeName = null;
+    let advanced = 0;
+    if (pool.length % 2 === 1) {
+      const byeIdx = Math.floor(Math.random() * pool.length);
+      const byeId = pool.splice(byeIdx, 1)[0];
+      const p = level.players[byeId];
+      if (p) {
+        p.lStage = stage;
+        byeName = p.name;
+        advanced = 1;
+      }
     }
     let created = 0;
     for (let i = 0; i < pool.length; i += 2) {
       const p1 = pool[i], p2 = pool[i + 1];
       if (!p1 || !p2) continue;
-      const match = { id: uid(), createdAt: now(), bracket, p1, p2, tableNo: null };
-      if (bracket === 'W') {
-        match.round = round;
-      } else {
-        const dropOf = (id) => {
-          const p = level.players[id];
-          return p && typeof p.dropRound === 'number' && Number.isFinite(p.dropRound)
-            ? p.dropRound : (level.wRound || 1);
-        };
-        match.stage = Math.max(1, dropOf(p1), dropOf(p2));
-      }
-      level.pendingMatches.push(match);
-      created++;
+      level.pendingMatches.push({
+        id: uid(), createdAt: now(), bracket: 'L', stage, p1, p2, tableNo: null,
+      });
+      created += 1;
     }
-    return { created, byeName };
+    return { created, byeName, advanced, bracket: 'L', stage };
   }
 
   W.adjustTablesToAutoCount = function adjustTablesToAutoCount(level, eventsOut) {
@@ -235,26 +353,29 @@
   };
 
   /*
-   * 下一场可上场对阵的选择规则（调度优先级唯一实现）：
+   * 下一场可上场对阵的选择规则（与 generateMatchesIfNeeded 共用波次顺序）：
    * - 只考虑双方未被任何桌子占用的比赛；
-   * - 胜者组（bracket === 'W'）始终优先于败者组（'L'）；
+   * - 败者组波次进行中时，只安排已就绪的 L，绝不插入下一波 W；
+   * - 否则先安排 W，再安排已就绪的 L；
    * - 同一优先级内保持 pendingMatches 原顺序，不重排数组、不重写历史。
    * 返回索引，-1 表示当前没有可上场的比赛。
    *
-   * 胜者组对阵不会依赖败者组结果（败者组只汇入总决赛），因此“先胜者组”
-   * 不会造成死锁：胜者组全部打完后，败者组仍可继续推进。
-   * 若队列里只有被占用选手的胜者组对阵，则允许先安排可上场的败者组比赛，
-   * 避免空桌等待。
+   * 闸门未满足的 L 永远不进入兜底；W 也不会在 L 波次中途抢占空桌。
+   * 两种组别因此不会同时出现在桌上，S1 也就不可能与 W2 并行。
    */
   W.selectNextPendingIndex = function selectNextPendingIndex(level, inUse) {
     const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
     const used = inUse || new Set();
+    const allowWinner = !hasActiveLoserWave(level);
     let fallback = -1;
     for (let i = 0; i < pending.length; i++) {
       const m = pending[i];
       if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
       if (used.has(m.p1) || used.has(m.p2)) continue;
-      if (m.bracket === 'W') return i;
+      if (m.bracket === 'W') {
+        if (allowWinner) return i;
+        continue;
+      }
       // 只用阶段已满足的败者组兜底，绝不提前开打
       if (fallback === -1 && W.isLoserStageReady(level, m)) fallback = i;
     }
@@ -292,6 +413,12 @@
     level.tables = snap.tables; level.history = snap.history;
     level.finished = snap.finished; level.grandFinal = snap.grandFinal; level.banners = snap.banners;
     if (typeof snap.wRound === 'number') level.wRound = snap.wRound;
+    // 旧快照没有 lStage 时从 dropRound 恢复，避免撤销后阶段闸门失去依据
+    for (const p of Object.values(level.players || {})) {
+      if (!Number.isFinite(p.lStage)) {
+        p.lStage = Math.max(0, (p.dropRound || 1) - 1);
+      }
+    }
   }
 
   W.undoLast = function undoLast(level, scope) {
@@ -316,15 +443,28 @@
     if (!w || !l) return events;
     W.pushUndoSnapshot(level, `table:${tableNo}`);
     W.pushUndoSnapshot(level, 'global');
-    level.history.push({ id: uid(), at: now(), tableNo, bracket: match.bracket, p1: match.p1, p2: match.p2, winnerId, loserId });
+    level.history.push({
+      id: uid(), at: now(), tableNo, bracket: match.bracket,
+      p1: match.p1, p2: match.p2, winnerId, loserId,
+      round: match.bracket === 'W' && Number.isFinite(match.round) ? match.round : null,
+      stage: match.bracket === 'L' ? loserStageOf(level, match) : null,
+    });
     if (match.bracket === 'W') {
-      // 记录落入败者组时所处的胜者组轮次，供败者组阶段闸门使用
-      l.dropRound = typeof match.round === 'number' && Number.isFinite(match.round)
-        ? match.round : (level.wRound || 1);
+      // 落入败者组：dropRound=r 表示下一场 L 属于第 r 阶段（W1 负者进 L1，
+      // W2 负者进 L2），lStage 记录已经完成的阶段数。
+      const round = Number.isFinite(match.round) ? match.round : (level.wRound || 1);
+      l.dropRound = round;
+      l.lStage = Math.max(0, round - 1);
       l.losses += 1;
       if (l.losses >= 2) W.eliminate(level, l.id); else l.bracket = 'L';
     }
-    else if (match.bracket === 'L') { l.losses += 1; if (l.losses >= 2) W.eliminate(level, l.id); }
+    else if (match.bracket === 'L') {
+      const stage = loserStageOf(level, match);
+      w.lStage = Math.max(w.lStage || 0, stage);
+      l.lStage = Math.max(l.lStage || 0, stage);
+      l.losses += 1;
+      if (l.losses >= 2) W.eliminate(level, l.id);
+    }
     cleanupPendingMatches(level);
     table.match = null;
     const stageEvt = maybeStageEvent(level);
@@ -420,7 +560,7 @@
     level.pendingMatches = []; level.history = []; level.undoStack = []; level.grandFinal = null;
     for (const p of Object.values(level.players)) {
       p.losses = 0; p.eliminatedAt = null; p.eliminatedSeq = null; p.dropRound = null;
-      p.placement = null; p.bracket = 'W';
+      p.lStage = 0; p.placement = null; p.bracket = 'W';
       if (!p.pinyin) p.pinyin = W.getPinyin(p.name);
     }
     const want = W.computeTableCount(level);

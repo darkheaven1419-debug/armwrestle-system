@@ -1,79 +1,199 @@
 'use strict';
 
 /*
- * 双败赛制调度优先级回归测试。
- * 核心规则：每次给空桌分配比赛时，只要队列里存在双方都空闲的胜者组比赛，
- * 就必须先安排胜者组；败者组只能在当前没有可开赛胜者组时上场。
+ * 双败赛制“阶段波次”回归测试。
  *
- * 这些测试从真实的首轮发牌开始推进完整 9 人赛事，不预先构造排好的队列。
+ * 目标顺序（9 人）：W1 → W2 → L1 → W3 → L2 → W4 → L3 → L4 → L5 → 总决赛。
+ * 规则不是“有可开赛的 W 就优先”，而是：
+ * - 当前 W 波次全部结束前，不得开 L；
+ * - 当前 L 阶段全部结束前，不得生成下一轮 W；
+ * - 相同波次可以在多张桌子上并行，但不能跨波次并行。
+ *
+ * 所有完整模拟都从真实的首轮发牌开始，不预先构造排好的队列。
  */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const {
-  createApp,
-  makeLevel,
-  startLevel,
-} = require('./harness');
-
-/* 包住 W.fillTables：记录每次实际分配，并在分配后校验优先级不变式。 */
-function attachRecorder(W) {
-  const records = [];
-  const original = W.fillTables;
-  W.fillTables = function recordedFillTables(level) {
-    const beforeIds = level.tables.map((t) => (t.match ? t.match.id : null));
-    const pendingBefore = level.pendingMatches.map((m) => ({ ...m }));
-    original(level);
-
-    const assigned = [];
-    level.tables.forEach((t, i) => {
-      if (t.match && beforeIds[i] !== t.match.id) {
-        assigned.push({
-          tableNo: t.tableNo,
-          id: t.match.id,
-          bracket: t.match.bracket,
-          p1: t.match.p1,
-          p2: t.match.p2,
-        });
-      }
-    });
-
-    const inUse = new Set();
-    for (const t of level.tables) {
-      if (!t.match) continue;
-      inUse.add(t.match.p1);
-      inUse.add(t.match.p2);
-    }
-    const violations = [];
-    for (const a of assigned) {
-      if (a.bracket === 'W') continue;
-      const playableW = level.pendingMatches.find(
-        (m) => m.bracket === 'W' && !inUse.has(m.p1) && !inUse.has(m.p2),
-      );
-      if (playableW) {
-        violations.push({
-          assignedL: a.id,
-          tableNo: a.tableNo,
-          skippedW: playableW.id,
-          skippedWPlayers: [playableW.p1, playableW.p2],
-        });
-      }
-    }
-    records.push({ pendingBefore, assigned, violations });
-    return undefined;
-  };
-  return records;
-}
+const { createApp, makeLevel, startLevel } = require('./harness');
 
 function names(level, ids) {
   return ids.map((id) => level.players[id]?.name || id);
 }
 
-/*
- * 按真实界面顺序推进：生成 -> 填桌 -> 结算一场。
- * 返回本场记录；无事可做时返回 null（总决赛单独处理）。
- */
+function liveMatches(level) {
+  return [
+    ...level.pendingMatches,
+    ...level.tables.filter((t) => t.match).map((t) => t.match),
+  ];
+}
+
+function liveByBracket(level, bracket) {
+  return liveMatches(level).filter((m) => m && m.bracket === bracket);
+}
+
+function keyOf(bracket, round, stage) {
+  return bracket === 'W' ? `W:${round}` : `L:${stage}`;
+}
+
+/* 包住引擎入口，记录每次真实分配、结算和不变式检查。 */
+function attachRecorder(W) {
+  const events = [];
+  const originalGenerate = W.generateMatchesIfNeeded;
+  const originalFill = W.fillTables;
+  const originalResolve = W.resolveMatch;
+
+  W.generateMatchesIfNeeded = function recordedGenerate(level) {
+    const result = originalGenerate(level);
+    for (const evt of result || []) {
+      events.push({
+        type: 'engine',
+        event: evt.type,
+        bracket: evt.bracket || null,
+        count: evt.count || 0,
+        name: evt.name || null,
+      });
+    }
+    const w = liveByBracket(level, 'W');
+    const l = liveByBracket(level, 'L');
+    if (w.length && l.length) {
+      events.push({
+        type: 'violation',
+        kind: 'overlapAfterGenerate',
+        w: w.map((m) => ({ id: m.id, round: m.round })),
+        l: l.map((m) => ({ id: m.id, stage: m.stage })),
+      });
+    }
+    return result;
+  };
+
+  W.fillTables = function recordedFill(level) {
+    const view = W.getMatchupView(level);
+    const beforeTableIds = new Set(level.tables.filter((t) => t.match).map((t) => t.match.id));
+    const beforeLive = liveMatches(level).map((m) => ({
+      id: m.id, bracket: m.bracket, round: m.round, stage: m.stage, p1: m.p1, p2: m.p2,
+    }));
+    originalFill(level);
+
+    const assigned = [];
+    for (const t of level.tables) {
+      if (!t.match || beforeTableIds.has(t.match.id)) continue;
+      const m = t.match;
+      assigned.push({
+        id: m.id, tableNo: t.tableNo, bracket: m.bracket,
+        round: m.round ?? null, stage: m.stage ?? null, p1: m.p1, p2: m.p2,
+      });
+      events.push({
+        type: 'start',
+        id: m.id,
+        tableNo: t.tableNo,
+        bracket: m.bracket,
+        round: m.round ?? null,
+        stage: m.stage ?? null,
+        p1: m.p1,
+        p2: m.p2,
+        p1Name: names(level, [m.p1])[0],
+        p2Name: names(level, [m.p2])[0],
+        p1Drop: level.players[m.p1]?.dropRound ?? null,
+        p2Drop: level.players[m.p2]?.dropRound ?? null,
+        p1LStage: level.players[m.p1]?.lStage ?? null,
+        p2LStage: level.players[m.p2]?.lStage ?? null,
+      });
+    }
+    events.push({
+      type: 'fill',
+      assigned: assigned.map((a) => ({ ...a })),
+      viewNext: view.next ? view.next.matchId : null,
+      viewStatus: view.nextStatus,
+    });
+
+    if (assigned.length && view.nextStatus === 'ready' && view.next
+      && assigned[0].id !== view.next.matchId) {
+      events.push({
+        type: 'violation',
+        kind: 'nextViewMismatch',
+        engineNext: assigned[0].id,
+        viewNext: view.next.matchId,
+      });
+    }
+
+    // 任何时刻都不允许 W 与 L 同时处于“候场/桌上”
+    const w = liveByBracket(level, 'W');
+    const l = liveByBracket(level, 'L');
+    if (w.length && l.length) {
+      events.push({
+        type: 'violation',
+        kind: 'overlapAfterFill',
+        w: w.map((m) => ({ id: m.id, round: m.round })),
+        l: l.map((m) => ({ id: m.id, stage: m.stage })),
+      });
+    }
+
+    // 同一选手不能同时出现在两场未完成比赛里
+    const seen = new Set();
+    for (const m of liveMatches(level)) {
+      for (const id of [m.p1, m.p2]) {
+        if (!id) continue;
+        if (seen.has(id)) {
+          events.push({ type: 'violation', kind: 'doubleBooked', playerId: id });
+        }
+        seen.add(id);
+      }
+    }
+
+    // L 开打时，对应波次的 W 必须已经全部完成
+    for (const a of assigned) {
+      if (a.bracket !== 'L' || !Number.isFinite(a.stage)) continue;
+      const blockers = beforeLive.filter((m) => m.bracket === 'W'
+        && (typeof m.round !== 'number' || !Number.isFinite(m.round) || m.round <= a.stage + 1));
+      if (blockers.length) {
+        events.push({
+          type: 'violation',
+          kind: 'earlyLoserMatch',
+          matchId: a.id,
+          stage: a.stage,
+          tableNo: a.tableNo,
+          blockers,
+        });
+      }
+    }
+
+    return undefined;
+  };
+
+  W.resolveMatch = function recordedResolve(level, tableNo, winnerId) {
+    const table = level.tables.find((t) => t.tableNo === tableNo);
+    const match = table && table.match;
+    const result = originalResolve(level, tableNo, winnerId);
+    if (match) {
+      const loserId = match.p1 === winnerId ? match.p2 : match.p1;
+      events.push({
+        type: 'resolve',
+        id: match.id,
+        tableNo,
+        bracket: match.bracket,
+        round: match.round ?? null,
+        stage: match.stage ?? null,
+        p1: match.p1,
+        p2: match.p2,
+        winnerId,
+        loserId,
+      });
+    }
+    return result;
+  };
+
+  return {
+    events,
+    restore() {
+      W.generateMatchesIfNeeded = originalGenerate;
+      W.fillTables = originalFill;
+      W.resolveMatch = originalResolve;
+    },
+  };
+}
+
+/* 按真实界面顺序推进：生成 -> 填桌 -> 结算一场。 */
 function advance(W, level, schedule, options) {
   const opts = options || {};
   W.generateMatchesIfNeeded(level);
@@ -87,8 +207,8 @@ function advance(W, level, schedule, options) {
       W.finalizeIfDone(level);
       schedule.push({
         type: 'grandFinal',
-        game: (gf.wins1 || 0) + (gf.wins2 || 0),
         bracket: 'GF',
+        game: (gf.wins1 || 0) + (gf.wins2 || 0),
         p1: names(level, [gf.p1])[0],
         p2: names(level, [gf.p2])[0],
         winner: names(level, [which === 1 ? gf.p1 : gf.p2])[0],
@@ -111,6 +231,8 @@ function advance(W, level, schedule, options) {
     tableNo: table.tableNo,
     bracket: match.bracket,
     matchId: match.id,
+    round: match.round ?? null,
+    stage: match.stage ?? null,
     players: names(level, [match.p1, match.p2]),
     winner: names(level, [winnerId])[0],
     loser: names(level, [loserId])[0],
@@ -127,7 +249,7 @@ function advance(W, level, schedule, options) {
 function runTournament(W, level, options) {
   const schedule = [];
   let guard = 0;
-  while (!level.finished && guard < 500) {
+  while (!level.finished && guard < 1000) {
     guard += 1;
     const result = advance(W, level, schedule, options);
     if (!result) break;
@@ -135,219 +257,337 @@ function runTournament(W, level, options) {
   return schedule;
 }
 
-function assertNoPriorityViolations(records) {
-  const all = [];
-  for (const r of records) all.push(...r.violations);
-  assert.deepEqual(all, [], `败者组抢在可开赛胜者组之前上场：\n${JSON.stringify(all, null, 2)}`);
+function assertCompletePlacements(W, level, count) {
+  W.computePlacements(level);
+  const placements = Object.values(level.players).map((p) => p.placement).sort((a, b) => a - b);
+  assert.deepEqual(placements, Array.from({ length: count }, (_, i) => i + 1));
 }
 
-function assertNoDuplicatePlayersOnTables(level) {
-  const seen = new Set();
-  for (const t of level.tables) {
-    if (!t.match) continue;
-    for (const id of [t.match.p1, t.match.p2]) {
-      assert.equal(seen.has(id), false, `选手 ${id} 同时出现在多张桌子上`);
-      seen.add(id);
+function firstStartIndex(events, key) {
+  return events.findIndex((e) => e.type === 'start' && keyOf(e.bracket, e.round, e.stage) === key);
+}
+
+function lastResolveIndex(events, key) {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const e = events[i];
+    if (e.type === 'resolve' && keyOf(e.bracket, e.round, e.stage) === key) return i;
+  }
+  return -1;
+}
+
+/*
+ * 严格波次断言：
+ * - W1 完成后才 W2；W2 完成后才 L1；
+ * - 每个 L 阶段完成后才进入下一轮 W（W3 等 L1，W4 等 L2）；
+ * - 每个 L 阶段完成后才进入下一 L 阶段。
+ */
+function assertWaveOrder(events, maxW, maxL) {
+  for (let r = 1; r <= maxW; r += 1) {
+    assert.ok(firstStartIndex(events, `W:${r}`) >= 0, `缺少 W${r} 的实际开赛记录`);
+    assert.ok(lastResolveIndex(events, `W:${r}`) >= 0, `缺少 W${r} 的结算记录`);
+  }
+  for (let s = 1; s <= maxL; s += 1) {
+    assert.ok(firstStartIndex(events, `L:${s}`) >= 0, `缺少 L${s} 的实际开赛记录`);
+    assert.ok(lastResolveIndex(events, `L:${s}`) >= 0, `缺少 L${s} 的结算记录`);
+  }
+
+  for (let r = 2; r <= maxW; r += 1) {
+    assert.ok(
+      firstStartIndex(events, `W:${r}`) > lastResolveIndex(events, `W:${r - 1}`),
+      `W${r} 不得早于 W${r - 1} 结算完成`,
+    );
+  }
+
+  for (let s = 1; s <= maxL; s += 1) {
+    if (s >= 2) {
+      assert.ok(
+        firstStartIndex(events, `L:${s}`) > lastResolveIndex(events, `L:${s - 1}`),
+        `L${s} 不得早于 L${s - 1} 结算完成`,
+      );
+    }
+    if (s + 1 <= maxW) {
+      assert.ok(
+        firstStartIndex(events, `L:${s}`) > lastResolveIndex(events, `W:${s + 1}`),
+        `L${s} 不得早于 W${s + 1} 结算完成（W${s + 1} 是它的对应波次）`,
+      );
+    }
+    if (s + 2 <= maxW) {
+      assert.ok(
+        firstStartIndex(events, `W:${s + 2}`) > lastResolveIndex(events, `L:${s}`),
+        `W${s + 2} 不得早于 L${s} 结算完成`,
+      );
     }
   }
 }
 
-function assertCompletePlacements(W, level, expectedCount) {
-  W.computePlacements(level);
-  const placements = Object.values(level.players).map((p) => p.placement).sort((a, b) => a - b);
-  assert.deepEqual(placements, Array.from({ length: expectedCount }, (_, i) => i + 1));
+function assertNoViolations(recorder) {
+  const violations = recorder.events.filter((e) => e.type === 'violation');
+  assert.deepEqual(violations, [], `波次/占用违规：\n${JSON.stringify(violations, null, 2)}`);
+}
+
+function hasParallelFill(events, bracket) {
+  return events.some((e) => e.type === 'fill'
+    && e.assigned.filter((a) => a.bracket === bracket).length >= 2
+    && new Set(e.assigned.filter((a) => a.bracket === bracket).map((a) => a.tableNo)).size >= 2);
+}
+
+function maxTableUsed(events) {
+  return Math.max(0, ...events.filter((e) => e.type === 'start').map((e) => e.tableNo || 0));
+}
+
+function byeCount(events) {
+  return events.filter((e) => e.type === 'engine' && e.event === 'bye').length;
+}
+
+function assertFullResult(W, level, recorder, maxW, maxL, count) {
+  assertNoViolations(recorder);
+  assert.equal(level.finished, true, '赛事必须自然结束，不能因波次闸门死锁');
+  assertCompletePlacements(W, level, count);
+  assertWaveOrder(recorder.events, maxW, maxL);
+  assert.ok(recorder.events.some((e) => e.type === 'start' && e.bracket === 'W'));
+  assert.ok(recorder.events.some((e) => e.type === 'start' && e.bracket === 'L'));
+  assert.equal(level.grandFinal?.completed, true);
+  assert.ok(level.grandFinal.wins1 === 2 || level.grandFinal.wins2 === 2);
 }
 
 for (const maxTables of [1, 3]) {
-  test(`9 人双败完整模拟（桌数上限 ${maxTables}）：败者组不会抢在可开赛胜者组之前`, () => {
+  test(`9 人完整模拟（桌数上限 ${maxTables}）：严格 W1→W2→L1→W3→L2→W4→L3...`, () => {
     const { W } = createApp({ seed: 20261025 });
     const { level } = makeLevel(W, 9, { maxTables });
-    const records = attachRecorder(W);
-
+    const recorder = attachRecorder(W);
     startLevel(W, level);
-    // 首轮：9 人 -> 4 场胜者组 + 1 个轮空，不应生成败者组假比赛
-    const firstRound = [
-      ...level.pendingMatches.map((m) => m.bracket),
-      ...level.tables.filter((t) => t.match).map((t) => t.match.bracket),
-    ];
+
+    const firstRound = liveMatches(level);
     assert.equal(firstRound.length, 4);
-    assert.deepEqual(new Set(firstRound), new Set(['W']));
+    assert.deepEqual(new Set(firstRound.map((m) => m.bracket)), new Set(['W']));
     assert.equal(level.grandFinal, null);
-    // 9 人时引擎自动桌数为 2（存活 ≤16），maxTables=3 只是上限
+    // 9 人存活时引擎自动桌数为 2；maxTables=3 只是上限
     assert.equal(level.tables.length, Math.min(maxTables, 2));
 
-    const schedule = runTournament(W, level, { alternate: true });
+    runTournament(W, level, { alternate: true });
+    assertFullResult(W, level, recorder, 4, 5, 9);
 
-    assertNoPriorityViolations(records);
-    assert.equal(level.finished, true);
-    assertCompletePlacements(W, level, 9);
-
-    // 记录里必须同时出现胜者组、败者组和总决赛，证明赛事真实推进完整
-    const brackets = new Set(schedule.map((s) => s.bracket));
-    assert.ok(brackets.has('W'));
-    assert.ok(brackets.has('L'));
-    assert.ok(brackets.has('GF'));
-
-    // 单桌时“胜者组优先”意味着整个胜者组阶段先完成，再接败者组
+    assert.ok(byeCount(recorder.events) >= 1, '9 人首轮必须记录轮空');
     if (maxTables === 1) {
-      const bracketOrder = schedule.map((s) => s.bracket);
-      const lastW = bracketOrder.lastIndexOf('W');
-      const firstL = bracketOrder.indexOf('L');
-      assert.ok(lastW < firstL, `单桌顺序应为全部胜者组先于败者组：${bracketOrder.join(',')}`);
+      assert.equal(maxTableUsed(recorder.events), 1);
+    } else {
+      assert.equal(maxTableUsed(recorder.events), 2);
+      assert.ok(hasParallelFill(recorder.events, 'W') || hasParallelFill(recorder.events, 'L'),
+        '两桌配置下同波次应至少有一次并行开赛');
     }
-
-    // 最后一场正赛结束后每桌仍不应有重复选手
-    assertNoDuplicatePlayersOnTables(level);
-
-    // 总决赛 BO3 不会产生额外负场误记
-    const gf = level.grandFinal;
-    assert.equal(gf.completed, true);
-    assert.ok(gf.wins1 === 2 || gf.wins2 === 2);
+    recorder.restore();
   });
 }
 
-test('9 人赛事中每场实际分配都带真实阶段元信息，且同组内保持队列顺序', () => {
-  const { W } = createApp({ seed: 99 });
+test('16 人两桌：同波次可并行，但 L1 不会与 W2 重叠', () => {
+  const { W } = createApp({ seed: 1601 });
+  const { level } = makeLevel(W, 16, { maxTables: 3 });
+  const recorder = attachRecorder(W);
+  startLevel(W, level);
+
+  // 16 人存活时自动桌数为 2；maxTables=3 只是上限
+  assert.equal(level.tables.length, 2);
+  runTournament(W, level, { alternate: true });
+  assertFullResult(W, level, recorder, 4, 5, 16);
+  assert.equal(maxTableUsed(recorder.events), 2);
+  assert.ok(hasParallelFill(recorder.events, 'L'), 'L1 应有多桌并行，而不是被闸门串行化');
+  recorder.restore();
+});
+
+test('17 人三桌：真实三桌并发下仍严格按波次推进', () => {
+  const { W } = createApp({ seed: 1701 });
+  const { level } = makeLevel(W, 17, { maxTables: 3 });
+  const recorder = attachRecorder(W);
+  startLevel(W, level);
+
+  assert.equal(level.tables.length, 3);
+  runTournament(W, level, { alternate: true });
+  assertFullResult(W, level, recorder, 4, 5, 17);
+  assert.equal(maxTableUsed(recorder.events), 3);
+  assert.ok(hasParallelFill(recorder.events, 'L'));
+  assert.ok(byeCount(recorder.events) >= 1);
+  recorder.restore();
+});
+
+test('W2 仍在桌上时，S1 即使双方空闲也不能占用空桌', () => {
+  const { W } = createApp();
+  const { level } = makeLevel(W, 8, { maxTables: 2 });
+  startLevel(W, level);
+
+  const ids = Object.keys(level.players);
+  ids.forEach((id, i) => {
+    const p = level.players[id];
+    p.losses = i < 4 ? 0 : 1;
+    p.bracket = i < 4 ? 'W' : 'L';
+    p.dropRound = i < 4 ? null : 1;
+    p.lStage = 0;
+    p.eliminatedAt = null;
+    p.eliminatedSeq = null;
+  });
+  level.wRound = 2;
+  level.finished = false;
+  level.grandFinal = null;
+  level.tables = [
+    {
+      tableNo: 1,
+      undo: [],
+      match: {
+        id: 'w2-running', createdAt: 1, bracket: 'W', round: 2,
+        p1: ids[0], p2: ids[1], tableNo: 1,
+      },
+    },
+    { tableNo: 2, match: null, undo: [] },
+  ];
+  level.pendingMatches = [
+    { id: 's1-ready', createdAt: 2, bracket: 'L', stage: 1, p1: ids[4], p2: ids[5], tableNo: null },
+  ];
+
+  const s1 = level.pendingMatches[0];
+  assert.equal(W.isLoserStageReady(level, s1), false, 'W2 未完成时 S1 不具备开赛资格');
+  assert.equal(W.getMatchupView(level).nextStatus, 'pendingAfterCurrent');
+  W.fillTables(level);
+  assert.equal(level.tables[1].match, null, '空桌不能绕过 W2 波次闸门');
+
+  // W2 结算后，S1 才能上场
+  level.tables[0].match = null;
+  assert.equal(W.isLoserStageReady(level, s1), true);
+  W.fillTables(level);
+  assert.ok(level.tables.some((t) => t.match && t.match.bracket === 'L'));
+});
+
+test('S1 未全部完成时，W3 必须等待；S1 完成后 W3 才能生成', () => {
+  const { W } = createApp();
+  const { level } = makeLevel(W, 9, { maxTables: 2 });
+  startLevel(W, level);
+
+  const ids = Object.keys(level.players);
+  ids.forEach((id, i) => {
+    const p = level.players[id];
+    p.bracket = i < 2 ? 'W' : 'L';
+    p.losses = i < 2 ? 0 : 1;
+    p.dropRound = i < 2 ? null : 1;
+    // ids[6..8] 已经完成 L1，只用于保持 9 人存活、避免桌数被自动缩减
+    p.lStage = i < 6 ? 0 : 1;
+    p.eliminatedAt = null;
+    p.eliminatedSeq = null;
+  });
+  level.wRound = 2;
+  level.finished = false;
+  level.grandFinal = null;
+  level.tables = [
+    { tableNo: 1, match: null, undo: [] },
+    { tableNo: 2, match: null, undo: [] },
+  ];
+  level.pendingMatches = [
+    { id: 's1-a', createdAt: 1, bracket: 'L', stage: 1, p1: ids[2], p2: ids[3], tableNo: null },
+    { id: 's1-b', createdAt: 2, bracket: 'L', stage: 1, p1: ids[4], p2: ids[5], tableNo: null },
+  ];
+
+  W.generateMatchesIfNeeded(level);
+  assert.equal(level.wRound, 2, 'S1 尚未开打，不得生成 W3');
+  assert.equal(level.pendingMatches.some((m) => m.bracket === 'W'), false);
+
+  W.fillTables(level);
+  const lTables = level.tables.filter((t) => t.match);
+  assert.equal(lTables.length, 2);
+  assert.ok(lTables.every((t) => t.match.bracket === 'L' && t.match.stage === 1));
+
+  // 只结算一场时，W3 仍必须等待。存活数降到 8 后桌数会缩为 1，
+  // 第二场 L 被安全退回队列，再重新填桌结算。
+  W.resolveMatch(level, lTables[0].tableNo, lTables[0].match.p1);
+  W.generateMatchesIfNeeded(level);
+  assert.equal(level.wRound, 2);
+  assert.equal(level.pendingMatches.some((m) => m.bracket === 'W'), false);
+  assert.ok(level.pendingMatches.some((m) => m.bracket === 'L' && m.stage === 1));
+
+  W.fillTables(level);
+  const remaining = level.tables.find((t) => t.match);
+  assert.ok(remaining && remaining.match.bracket === 'L');
+  W.resolveMatch(level, remaining.tableNo, remaining.match.p1);
+
+  // 两场 S1 都完成后，才生成 W3
+  W.generateMatchesIfNeeded(level);
+  assert.equal(level.wRound, 3);
+  assert.ok(level.pendingMatches.some((m) => m.bracket === 'W' && m.round === 3));
+});
+
+test('下一组视图与引擎实际分配一致：W2 完成后先显示 L1', () => {
+  const { W } = createApp({ seed: 33 });
   const { level } = makeLevel(W, 9, { maxTables: 1 });
-  const records = attachRecorder(W);
+  startLevel(W, level);
+
+  // 打完 W1（4 场）与 W2（2 场），最后一场只生成、不填桌
+  for (let i = 0; i < 6; i += 1) {
+    const table = level.tables.find((t) => t.match);
+    assert.ok(table, `第 ${i + 1} 场应有比赛`);
+    W.resolveMatch(level, table.tableNo, table.match.p1);
+    W.generateMatchesIfNeeded(level);
+    if (i < 5) W.fillTables(level);
+  }
+
+  const view = W.getMatchupView(level);
+  assert.equal(view.nextStatus, 'ready');
+  assert.equal(view.next.bracket, 'L');
+  assert.equal(view.next.stage, 1);
+  W.fillTables(level);
+  const table = level.tables.find((t) => t.match);
+  assert.equal(table.match.id, view.next.matchId);
+  assert.equal(table.match.bracket, 'L');
+});
+
+test('轮空、退赛与撤回不会造成假比赛、双占或波次死锁', () => {
+  const { W } = createApp({ seed: 91 });
+  const { level } = makeLevel(W, 9, { maxTables: 2 });
+  startLevel(W, level);
+
+  // 推进到有 W/L 混合历史后退赛一名当前仍在参赛的选手
+  for (let i = 0; i < 6; i += 1) advance(W, level, []);
+  const active = Object.values(level.players).find((p) => p.losses < 2 && !p.eliminatedAt);
+  assert.ok(active);
+  assert.equal(W.withdrawPlayer(level, active.id), true);
+  W.generateMatchesIfNeeded(level);
+  W.fillTables(level);
+
+  // 撤回最近一场，再从真实状态继续打完
+  const msg = W.undoLast(level, 'global');
+  assert.ok(msg);
+  runTournament(W, level, {});
+
+  assert.equal(level.finished, true);
+  assertCompletePlacements(W, level, 9);
+  const all = liveMatches(level);
+  const seen = new Set();
+  for (const m of all) {
+    for (const id of [m.p1, m.p2]) {
+      assert.equal(seen.has(id), false, `选手 ${id} 同时出现在两场未完成比赛`);
+      seen.add(id);
+    }
+  }
+});
+
+test('名次与淘汰先后一致：越早淘汰名次越靠后', () => {
+  const { W } = createApp({ seed: 7 });
+  const { level } = makeLevel(W, 9);
   startLevel(W, level);
   runTournament(W, level, {});
 
-  for (const r of records) {
-    const beforeW = Array.from(r.pendingBefore, (m) => m).filter((m) => m.bracket === 'W').map((m) => m.id);
-    const assignedW = r.assigned.filter((m) => m.bracket === 'W').map((m) => m.id);
-    if (!assignedW.length) continue;
-    // 同一阶段被分配到桌子的 W 比赛，必须按它们在队列中的原有先后顺序取用
-    const expected = beforeW.filter((id) => assignedW.includes(id));
-    assert.deepEqual(assignedW, expected);
+  W.computePlacements(level);
+  const eliminated = Object.values(level.players)
+    .filter((p) => p.eliminatedAt)
+    .sort((a, b) => a.eliminatedSeq - b.eliminatedSeq);
+  assert.ok(eliminated.length >= 8);
+  assert.deepEqual(eliminated.map((p) => p.eliminatedSeq), eliminated.map((_, i) => i + 1));
+
+  for (let i = 1; i < eliminated.length; i += 1) {
+    const earlier = eliminated[i - 1];
+    const later = eliminated[i];
+    assert.ok(earlier.placement > later.placement,
+      `更早淘汰的 ${earlier.name}（#${earlier.placement}）不应排在 ${later.name}（#${later.placement}）之前`);
   }
-});
 
-test('同阶段胜者组仍在桌上时，败者组即使凑齐双方也不能开打', () => {
-  const { W } = createApp();
-  const { level } = makeLevel(W, 6, { maxTables: 2 });
-  startLevel(W, level);
-
-  const ids = Object.keys(level.players);
-  const running = level.tables.find((t) => t.match).match;
-  running.round = 1;
-  level.wRound = 1;
-  const busyId = running.p1;
-  const free = ids.filter((id) => id !== running.p1 && id !== running.p2);
-  assert.ok(free.length >= 3);
-  level.players[free[1]].dropRound = 1;
-  level.players[free[2]].dropRound = 1;
-
-  level.tables = [
-    { tableNo: 1, match: running, undo: [] },
-    { tableNo: 2, match: null, undo: [] },
-  ];
-  level.pendingMatches = [
-    { id: 'blocked-W', createdAt: 1, bracket: 'W', round: 1, p1: busyId, p2: free[0], tableNo: null },
-    { id: 'ready-L', createdAt: 2, bracket: 'L', stage: 1, p1: free[1], p2: free[2], tableNo: null },
-  ];
-
-  W.fillTables(level);
-  const table2 = level.tables.find((t) => t.tableNo === 2);
-  assert.equal(table2.match, null, '同阶段 W 尚未完成时，L 不得占用空桌');
-  assert.equal(level.pendingMatches.some((m) => m.id === 'blocked-W'), true);
-  assert.equal(level.pendingMatches.some((m) => m.id === 'ready-L'), true);
-
-  // 阶段条件满足后必须能继续，不能因为等待而永久卡死
-  level.tables[0].match = null;
-  level.pendingMatches = level.pendingMatches.filter((m) => m.id !== 'blocked-W');
-  W.fillTables(level);
-  assert.ok(level.tables.some((t) => t.match && t.match.id === 'ready-L'),
-    '对应阶段 W 完成后 L 应能上桌');
-});
-
-test('后续轮次胜者组在桌上时，不阻塞已完成阶段的败者组', () => {
-  const { W } = createApp();
-  const { level } = makeLevel(W, 6, { maxTables: 2 });
-  startLevel(W, level);
-
-  const ids = Object.keys(level.players);
-  level.wRound = 2;
-  level.players[ids[2]].dropRound = 1;
-  level.players[ids[3]].dropRound = 1;
-  level.tables = [
-    { tableNo: 1, match: { id: 'round2-W', createdAt: 9, bracket: 'W', round: 2, p1: ids[0], p2: ids[1], tableNo: 1 }, undo: [] },
-    { tableNo: 2, match: null, undo: [] },
-  ];
-  level.pendingMatches = [
-    { id: 'stage1-L', createdAt: 10, bracket: 'L', stage: 1, p1: ids[2], p2: ids[3], tableNo: null },
-  ];
-
-  W.fillTables(level);
-  const table2 = level.tables.find((t) => t.tableNo === 2);
-  assert.equal(table2.match && table2.match.id, 'stage1-L',
-    'W 第 2 轮仍在进行，不应阻塞已经满足条件的第 1 阶段败者组');
-});
-
-test('阶段闸门：9 人从头整场模拟，L 不会早于对应 W 阶段开打', () => {
-  for (const maxTables of [1, 3]) {
-    const { W } = createApp({ seed: 20261025 });
-    const { level } = makeLevel(W, 9, { maxTables });
-    const violations = [];
-    const original = W.fillTables;
-    W.fillTables = function stageCheckedFillTables(lv) {
-      const before = {
-        pending: lv.pendingMatches.map((m) => ({ ...m })),
-        tables: lv.tables.map((t) => (t.match ? { ...t.match } : null)),
-      };
-      original(lv);
-      lv.tables.forEach((t, i) => {
-        if (!t.match || t.match.bracket !== 'L') return;
-        const prev = before.tables[i];
-        if (prev && prev.id === t.match.id) return; // 不是本次新开打的
-        const m = t.match;
-        if (typeof m.stage !== 'number' || !Number.isFinite(m.stage)) {
-          violations.push({ type: 'missingStage', matchId: m.id });
-          return;
-        }
-        const unsettled = before.pending.concat(before.tables.filter(Boolean))
-          .filter((x) => x.bracket === 'W' && (typeof x.round !== 'number' || x.round <= m.stage));
-        if (unsettled.length) {
-          violations.push({
-            type: 'earlyLoserMatch',
-            matchId: m.id,
-            stage: m.stage,
-            tableNo: t.tableNo,
-            unresolvedW: unsettled.map((x) => ({ id: x.id, round: x.round, p1: x.p1, p2: x.p2 })),
-          });
-        }
-      });
-    };
-
-    startLevel(W, level);
-    runTournament(W, level, {});
-    W.fillTables = original;
-
-    assert.deepEqual(violations, [], `maxTables=${maxTables} 出现败者组提前开打：\n${JSON.stringify(violations, null, 2)}`);
-    assert.equal(level.finished, true, `maxTables=${maxTables} 应能完整结束，不能死锁`);
-    assert.ok(level.history.some((h) => h.bracket === 'L'), '整场应至少产生一场败者组比赛');
-    assert.ok(level.wRound >= 1);
-  }
-});
-
-test('队列中有可开赛的胜者组时，即使它排在败者组之后也必须先上场', () => {
-  const { W } = createApp();
-  const { level } = makeLevel(W, 6, { maxTables: 1 });
-  startLevel(W, level);
-
-  const ids = Object.keys(level.players);
-  level.tables = [{ tableNo: 1, match: null, undo: [] }];
-  level.pendingMatches = [
-    { id: 'first-L', createdAt: 1, bracket: 'L', p1: ids[0], p2: ids[1], tableNo: null },
-    { id: 'second-W', createdAt: 2, bracket: 'W', p1: ids[2], p2: ids[3], tableNo: null },
-  ];
-
-  const view = W.getMatchupView(level);
-  assert.equal(view.next.matchId, 'second-W', '看板的下一组也必须遵守引擎优先级');
-
-  W.fillTables(level);
-  assert.equal(level.tables[0].match.id, 'second-W');
-  assert.deepEqual(level.pendingMatches.map((m) => m.id), ['first-L']);
+  const champ = Object.values(level.players).find((p) => p.placement === 1);
+  assert.ok(champ);
+  assert.equal(champ.eliminatedAt, null);
 });
 
 test('空队列、无效对阵和已淘汰残留不会造成异常或死锁', () => {
@@ -368,81 +608,4 @@ test('空队列、无效对阵和已淘汰残留不会造成异常或死锁', ()
   assert.equal(W.selectNextPendingIndex(level, new Set()), -1);
   W.fillTables(level);
   assert.equal(level.tables[0].match, null);
-});
-
-test('名次与淘汰先后一致：越早淘汰名次越靠后', () => {
-  const { W } = createApp({ seed: 7 });
-  const { level } = makeLevel(W, 9);
-  startLevel(W, level);
-  runTournament(W, level, {});
-
-  W.computePlacements(level);
-  const eliminated = Object.values(level.players)
-    .filter((p) => p.eliminatedAt)
-    .sort((a, b) => a.eliminatedSeq - b.eliminatedSeq);
-  assert.ok(eliminated.length >= 8);
-  assert.deepEqual(eliminated.map((p) => p.eliminatedSeq), eliminated.map((_, i) => i + 1));
-
-  for (let i = 1; i < eliminated.length; i++) {
-    const earlier = eliminated[i - 1];
-    const later = eliminated[i];
-    // 淘汰序号唯一，因此名次必须严格递减（数字越大名次越靠后）
-    assert.ok(earlier.placement > later.placement,
-      `更早淘汰的 ${earlier.name}（#${earlier.placement}）不应排在 ${later.name}（#${later.placement}）之前`);
-  }
-
-  const champ = Object.values(level.players).find((p) => p.placement === 1);
-  assert.ok(champ);
-  assert.equal(champ.eliminatedAt, null);
-});
-
-test('同一毫秒内连续淘汰时名次仍由淘汰序号决定', () => {
-  const { W } = createApp({ seed: 13 });
-  const { level } = makeLevel(W, 9);
-  startLevel(W, level);
-  runTournament(W, level, {});
-
-  const eliminated = Object.values(level.players)
-    .filter((p) => p.eliminatedAt)
-    .sort((a, b) => a.eliminatedSeq - b.eliminatedSeq);
-  assert.ok(eliminated.length >= 8);
-
-  // 模拟快速连续结算：把所有淘汰时间压成同一个毫秒
-  const sameStamp = 1700000000000;
-  for (const p of eliminated) p.eliminatedAt = sameStamp;
-
-  W.computePlacements(level);
-  for (let i = 1; i < eliminated.length; i++) {
-    const earlier = eliminated[i - 1];
-    const later = eliminated[i];
-    assert.ok(earlier.placement > later.placement,
-      `同一毫秒淘汰时，先淘汰的 ${earlier.name}（#${earlier.placement}）应排在后淘汰的 ${later.name}（#${later.placement}）之后`);
-  }
-
-  const champion = Object.values(level.players).find((p) => p.placement === 1);
-  assert.ok(champion);
-  assert.equal(champion.eliminatedAt, null);
-});
-
-test('补充对阵与撤回不会因优先级改动而丢失比赛或破坏负场', () => {
-  const { W } = createApp({ seed: 11 });
-  const { level } = makeLevel(W, 9);
-  startLevel(W, level);
-
-  // 推进到第二轮，制造 W/L 混合队列
-  for (let i = 0; i < 5; i++) advance(W, level, []);
-  const beforeHistory = level.history.length;
-  const beforeLosses = Object.values(level.players).reduce((sum, p) => sum + p.losses, 0);
-
-  assert.ok(level.history.length > 0);
-  const msg = W.undoLast(level, 'global');
-  assert.ok(msg);
-  assert.equal(level.history.length, beforeHistory - 1);
-  const afterLosses = Object.values(level.players).reduce((sum, p) => sum + p.losses, 0);
-  assert.ok(afterLosses < beforeLosses);
-
-  // 撤回后继续推进仍然可以正常完赛
-  runTournament(W, level, {});
-  assert.equal(level.finished, true);
-  assertCompletePlacements(W, level, 9);
 });

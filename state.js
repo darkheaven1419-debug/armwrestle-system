@@ -101,7 +101,7 @@
     const clean = truncateName(name, 30);
     return {
       id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0,
-      eliminatedAt: null, eliminatedSeq: null, dropRound: null, placement: null, bracket: 'W',
+      eliminatedAt: null, eliminatedSeq: null, dropRound: null, lStage: 0, placement: null, bracket: 'W',
     };
   };
 
@@ -239,6 +239,7 @@
       eliminatedAt: numOr(raw.eliminatedAt, null),
       eliminatedSeq: typeof raw.eliminatedSeq === 'number' && Number.isFinite(raw.eliminatedSeq) ? raw.eliminatedSeq : null,
       dropRound: typeof raw.dropRound === 'number' && Number.isFinite(raw.dropRound) ? raw.dropRound : null,
+      lStage: typeof raw.lStage === 'number' && Number.isFinite(raw.lStage) ? clampInt(raw.lStage, 0, 999) : null,
       placement: typeof raw.placement === 'number' && Number.isFinite(raw.placement) ? raw.placement : null,
       bracket,
     };
@@ -327,12 +328,31 @@
     }
 
     /*
-     * 阶段元数据迁移：
+     * 事件历史先归一化，下面的败者组进度迁移要用它恢复已完成阶段。
+     * round/stage 是新增元数据；旧历史缺失时保留 null，不伪造轮次。
+     */
+    level.history = (Array.isArray(raw.history) ? raw.history : [])
+      .filter((h) => isObj(h) && players[h.p1] && players[h.p2] && players[h.winnerId] && players[h.loserId])
+      .map((h) => ({
+        id: isSafeId(h.id) ? h.id : uid(),
+        at: numOr(h.at, now()),
+        tableNo: numOr(h.tableNo, null),
+        bracket: h.bracket === 'L' ? 'L' : 'W',
+        p1: h.p1, p2: h.p2, winnerId: h.winnerId, loserId: h.loserId,
+        round: h.bracket !== 'L' && Number.isFinite(h.round) ? Math.floor(h.round) : null,
+        stage: h.bracket === 'L' && Number.isFinite(h.stage) ? Math.max(1, Math.floor(h.stage)) : null,
+      }));
+
+    /*
+     * 阶段元数据迁移（波次模型）：
      * - 旧数据没有 wRound/round：所有已存在的 W 比赛视为第 1 轮；
      * - 旧数据没有 dropRound：已进入败者组（或已负场）的选手按当前轮次补齐；
-     * - 旧 L 对阵没有 stage：按双方 dropRound 计算。
-     * 缺失信息只会让败者组多等一轮，不会提前开打。
+     * - 新增 lStage：选手已经完成的败者组阶段数，从 dropRound 与历史 L 胜场推导；
+     * - 旧 L 对阵没有 stage：按双方 lStage 计算“下一个阶段”；
+     * - 旧版动态败者组可能把不同阶段的选手混在同一场，且全部卡在候场。
+     *   这类旧数据统一迁到“最早未完成阶段”，避免新闸门把旧数据锁死。
      */
+    const hadLoserProgress = Object.values(players).some((p) => Number.isFinite(p.lStage));
     const allMatches = level.pendingMatches.slice();
     for (const t of level.tables) if (t.match) allMatches.push(t.match);
     let maxWRound = 0;
@@ -350,22 +370,46 @@
       if (p.dropRound == null && (p.bracket === 'L' || p.losses > 0)) {
         p.dropRound = level.wRound || 1;
       }
+      if (!Number.isFinite(p.lStage)) {
+        p.lStage = p.bracket === 'L' || p.losses > 0
+          ? Math.max(0, (p.dropRound || 1) - 1)
+          : 0;
+      }
     }
-    for (const m of level.pendingMatches) {
-      if (m.bracket !== 'L' || Number.isFinite(m.stage)) continue;
-      const a = players[m.p1].dropRound, b = players[m.p2].dropRound;
-      m.stage = Math.max(1, a == null ? 1 : a, b == null ? 1 : b);
+    // 历史中的 L 胜场表示该选手已经完成对应阶段
+    for (const h of level.history) {
+      if (h.bracket !== 'L' || !Number.isFinite(h.stage)) continue;
+      const winner = players[h.winnerId];
+      if (winner) winner.lStage = Math.max(winner.lStage, h.stage);
     }
-
-    level.history = (Array.isArray(raw.history) ? raw.history : [])
-      .filter((h) => isObj(h) && players[h.p1] && players[h.p2] && players[h.winnerId] && players[h.loserId])
-      .map((h) => ({
-        id: isSafeId(h.id) ? h.id : uid(),
-        at: numOr(h.at, now()),
-        tableNo: numOr(h.tableNo, null),
-        bracket: h.bracket === 'L' ? 'L' : 'W',
-        p1: h.p1, p2: h.p2, winnerId: h.winnerId, loserId: h.loserId,
-      }));
+    const liveLoserMatches = allMatches.filter((m) => m.bracket === 'L');
+    for (const m of liveLoserMatches) {
+      if (!Number.isFinite(m.stage)) {
+        const a = players[m.p1].lStage, b = players[m.p2].lStage;
+        m.stage = Math.max(1, Math.min(a, b) + 1);
+      }
+    }
+    if (!hadLoserProgress && liveLoserMatches.length) {
+      let minL = Infinity;
+      for (const p of W.bracketPlayers(level, 'L')) {
+        if (p.lStage < minL) minL = p.lStage;
+      }
+      const repairStage = Number.isFinite(minL) ? Math.max(1, minL + 1) : 1;
+      for (const m of liveLoserMatches) {
+        m.stage = repairStage;
+        for (const id of [m.p1, m.p2]) {
+          const p = players[id];
+          if (p) p.lStage = Math.min(p.lStage, repairStage - 1);
+        }
+      }
+    }
+    for (const m of liveLoserMatches) {
+      // 已在某阶段中的选手必然已经完成前一阶段
+      for (const id of [m.p1, m.p2]) {
+        const p = players[id];
+        if (p) p.lStage = Math.max(p.lStage, m.stage - 1);
+      }
+    }
 
     level.undoStack = (Array.isArray(raw.undoStack) ? raw.undoStack : [])
       .filter(isObj)
