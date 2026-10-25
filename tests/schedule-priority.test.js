@@ -296,20 +296,49 @@ test('名次与淘汰先后一致：越早淘汰名次越靠后', () => {
   W.computePlacements(level);
   const eliminated = Object.values(level.players)
     .filter((p) => p.eliminatedAt)
-    .sort((a, b) => a.eliminatedAt - b.eliminatedAt);
+    .sort((a, b) => a.eliminatedSeq - b.eliminatedSeq);
   assert.ok(eliminated.length >= 8);
+  assert.deepEqual(eliminated.map((p) => p.eliminatedSeq), eliminated.map((_, i) => i + 1));
 
   for (let i = 1; i < eliminated.length; i++) {
     const earlier = eliminated[i - 1];
     const later = eliminated[i];
-    // 同一毫秒内淘汰的选手允许共享同一阶段，但名次必须按原语义保持次序
-    assert.ok(earlier.placement >= later.placement,
+    // 淘汰序号唯一，因此名次必须严格递减（数字越大名次越靠后）
+    assert.ok(earlier.placement > later.placement,
       `更早淘汰的 ${earlier.name}（#${earlier.placement}）不应排在 ${later.name}（#${later.placement}）之前`);
   }
 
   const champ = Object.values(level.players).find((p) => p.placement === 1);
   assert.ok(champ);
   assert.equal(champ.eliminatedAt, null);
+});
+
+test('同一毫秒内连续淘汰时名次仍由淘汰序号决定', () => {
+  const { W } = createApp({ seed: 13 });
+  const { level } = makeLevel(W, 9);
+  startLevel(W, level);
+  runTournament(W, level, {});
+
+  const eliminated = Object.values(level.players)
+    .filter((p) => p.eliminatedAt)
+    .sort((a, b) => a.eliminatedSeq - b.eliminatedSeq);
+  assert.ok(eliminated.length >= 8);
+
+  // 模拟快速连续结算：把所有淘汰时间压成同一个毫秒
+  const sameStamp = 1700000000000;
+  for (const p of eliminated) p.eliminatedAt = sameStamp;
+
+  W.computePlacements(level);
+  for (let i = 1; i < eliminated.length; i++) {
+    const earlier = eliminated[i - 1];
+    const later = eliminated[i];
+    assert.ok(earlier.placement > later.placement,
+      `同一毫秒淘汰时，先淘汰的 ${earlier.name}（#${earlier.placement}）应排在后淘汰的 ${later.name}（#${later.placement}）之后`);
+  }
+
+  const champion = Object.values(level.players).find((p) => p.placement === 1);
+  assert.ok(champion);
+  assert.equal(champion.eliminatedAt, null);
 });
 
 test('补充对阵与撤回不会因优先级改动而丢失比赛或破坏负场', () => {

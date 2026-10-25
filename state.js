@@ -97,7 +97,7 @@
 
   W.createPlayer = function createPlayer(name) {
     const clean = truncateName(name, 30);
-    return { id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0, eliminatedAt: null, placement: null, bracket: 'W' };
+    return { id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0, eliminatedAt: null, eliminatedSeq: null, placement: null, bracket: 'W' };
   };
 
   /* ---- 查询辅助 ---- */
@@ -137,7 +137,7 @@
     if (!p || p.losses >= 2) return false;
     if (W.pushUndoSnapshot) W.pushUndoSnapshot(level, 'global');
     p.losses = 2;
-    p.eliminatedAt = now();
+    W.markEliminated(level, p);
     // 清理该选手在队列和桌子上的所有比赛
     const alive = new Set(W.alivePlayers(level).map((x) => x.id));
     level.pendingMatches = level.pendingMatches.filter((m) => alive.has(m.p1) && alive.has(m.p2));
@@ -148,12 +148,37 @@
     return true;
   };
 
+  /*
+   * 记录淘汰顺序。名次以淘汰序号为准，而不是毫秒时间戳：
+   * 快速连续结算（或自动化测试）时，多人可能拿到同一个 Date.now()，
+   * 只按时间排序会让同毫秒淘汰者的名次变成未定义顺序。序号在级别内单调递增。
+   */
+  W.markEliminated = function markEliminated(level, p) {
+    if (!p) return;
+    if (!p.eliminatedAt) p.eliminatedAt = now();
+    if (typeof p.eliminatedSeq === 'number' && Number.isFinite(p.eliminatedSeq)) return;
+    let maxSeq = 0;
+    for (const x of Object.values(level.players || {})) {
+      const s = x && x.eliminatedSeq;
+      if (typeof s === 'number' && Number.isFinite(s) && s > maxSeq) maxSeq = s;
+    }
+    p.eliminatedSeq = maxSeq + 1;
+  };
+
   /* ---- 排名计算 ---- */
   W.computePlacements = function computePlacements(level) {
     const ps = Object.values(level.players);
     const total = ps.length;
     for (const p of ps) p.placement = null;
-    const eliminated = ps.filter((p) => p.eliminatedAt).sort((a, b) => a.eliminatedAt - b.eliminatedAt);
+    const seqOf = (p) => (typeof p.eliminatedSeq === 'number' && Number.isFinite(p.eliminatedSeq) ? p.eliminatedSeq : null);
+    const eliminated = ps.filter((p) => p.eliminatedAt).sort((a, b) => {
+      const sa = seqOf(a), sb = seqOf(b);
+      if (sa != null && sb != null) return sa - sb;
+      // 只有旧数据才会缺序号（加载时会补齐），时间戳兜底保持原行为
+      if (sa != null) return -1;
+      if (sb != null) return 1;
+      return a.eliminatedAt - b.eliminatedAt;
+    });
     eliminated.forEach((p, idx) => { p.placement = total - idx; });
     if (level.finished) {
       if (level.grandFinal?.completed && level.grandFinal.winnerId) {
@@ -207,6 +232,7 @@
       pinyin: typeof raw.pinyin === 'string' ? raw.pinyin : getPinyin(name || '未命名'),
       losses: clampInt(numOr(raw.losses, 0), 0, 2),
       eliminatedAt: numOr(raw.eliminatedAt, null),
+      eliminatedSeq: typeof raw.eliminatedSeq === 'number' && Number.isFinite(raw.eliminatedSeq) ? raw.eliminatedSeq : null,
       placement: typeof raw.placement === 'number' && Number.isFinite(raw.placement) ? raw.placement : null,
       bracket,
     };
@@ -251,6 +277,19 @@
     }
     if (skippedPlayers) warnings.push(`「${level.name}」有 ${skippedPlayers} 名选手数据无效，已跳过`);
     level.players = players;
+
+    /*
+     * 旧版导出没有淘汰序号：按原有的淘汰时间顺序补齐。
+     * 这样同一毫秒内淘汰的选手也保持升级前的排列，之后的名次不再随机。
+     */
+    let maxSeq = 0;
+    for (const p of Object.values(players)) {
+      if (typeof p.eliminatedSeq === 'number' && p.eliminatedSeq > maxSeq) maxSeq = p.eliminatedSeq;
+    }
+    const missingSeq = Object.values(players)
+      .filter((p) => p.eliminatedAt && typeof p.eliminatedSeq !== 'number')
+      .sort((a, b) => a.eliminatedAt - b.eliminatedAt);
+    for (const p of missingSeq) p.eliminatedSeq = ++maxSeq;
 
     const order = [];
     const seen = new Set();

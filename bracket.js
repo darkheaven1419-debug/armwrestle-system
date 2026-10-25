@@ -271,7 +271,8 @@
   W.eliminate = function eliminate(level, playerId) {
     const p = level.players[playerId];
     if (!p || p.eliminatedAt) return;
-    p.eliminatedAt = now();
+    // 由 state 统一打上淘汰序号：同一毫秒内连续淘汰时名次仍然确定
+    W.markEliminated(level, p);
   };
 
   // M2: 也处理 0 存活的情况
@@ -345,7 +346,7 @@
     level.banners = { top8Shown: false, top3Shown: false, gfShown: false };
     level.pendingMatches = []; level.history = []; level.undoStack = []; level.grandFinal = null;
     for (const p of Object.values(level.players)) {
-      p.losses = 0; p.eliminatedAt = null; p.placement = null; p.bracket = 'W';
+      p.losses = 0; p.eliminatedAt = null; p.eliminatedSeq = null; p.placement = null; p.bracket = 'W';
       if (!p.pinyin) p.pinyin = W.getPinyin(p.name);
     }
     const want = W.computeTableCount(level);
