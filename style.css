@@ -658,19 +658,42 @@ input[type="checkbox"] {
 
 .player-sidebar { gap: 14px; min-width: 0; }
 
-/* 压缩头部：标题、桌数入口、统计和操作压到两三行 */
-.level-hero-compact { border-color: rgba(227, 178, 91, 0.22); }
+/*
+ * 桌面：选手区独立滚动，长名单再长也不会把当前比赛、获胜按钮和下一组挤出首屏。
+ * 比赛区仍保持正常文档流，整页滚动时选手区跟随顶栏停在视口内。
+ */
+@media (min-width: 981px) {
+  .level-layout.is-started .player-sidebar {
+    position: sticky;
+    top: calc(var(--topbar-h) + 12px);
+    max-height: calc(100vh - var(--topbar-h) - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
+    scrollbar-gutter: stable;
+  }
+}
 
-.level-hero-compact .card-bd { padding: 12px 16px; }
+/* 紧凑头部：第一行标题/状态/桌数/统计，第二行单行工具条 */
+.level-hero-compact {
+  border-color: rgba(227, 178, 91, 0.22);
+  background:
+    linear-gradient(120deg, rgba(227, 178, 91, 0.055), transparent 42%),
+    var(--surface);
+  overflow: hidden;
+}
 
-.level-hero-top {
+.level-hero-compact .card-bd { padding: 10px 14px; }
+
+.level-hero-main {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
+  gap: 8px 14px;
   flex-wrap: wrap;
   min-width: 0;
 }
+
+.level-back-btn { flex: 0 0 auto; }
 
 .level-title-row {
   display: flex;
@@ -683,23 +706,27 @@ input[type="checkbox"] {
 
 .level-hero .title,
 .level-title {
-  font-size: clamp(19px, 1.8vw, 24px);
+  font-size: clamp(20px, 1.7vw, 26px);
+  line-height: 1.15;
   letter-spacing: 0.3px;
 }
 
 .level-hero-stats {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px 12px;
   flex-wrap: wrap;
+  margin-left: auto;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.3;
 }
 
+.level-stat { white-space: nowrap; }
+
 .level-progress-inline {
-  width: 120px;
-  height: 6px;
+  width: 96px;
+  height: 5px;
   border-radius: 999px;
   background: var(--surface-3);
   border: 1px solid var(--line);
@@ -715,22 +742,52 @@ input[type="checkbox"] {
   transition: width 320ms var(--ease);
 }
 
-.level-pct { color: var(--gold); font-weight: 760; }
+.level-pct { color: var(--gold); font-weight: 760; white-space: nowrap; }
 
-.level-hero-actions {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.level-toolbar {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
 
-.level-hero-actions .btn {
-  min-height: 38px;
-  padding: 6px 10px;
-  font-size: 13px;
-  white-space: normal;
-  text-align: center;
-  line-height: 1.25;
+.level-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.level-toolbar .btn {
+  min-height: 34px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.level-toolbar-danger-zone {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.toolbar-danger {
+  color: var(--danger);
+  border-color: rgba(240, 122, 122, 0.35);
+  background: rgba(240, 122, 122, 0.06);
+}
+
+.toolbar-danger:hover {
+  border-color: rgba(240, 122, 122, 0.62);
+  background: rgba(240, 122, 122, 0.13);
 }
 
 .level-table-limit {
@@ -739,24 +796,28 @@ input[type="checkbox"] {
   background: rgba(227, 178, 91, 0.08);
 }
 
-/* 下一组：单级别页面唯一的一行，避免与桌卡重复展示当前对阵 */
+/* 下一组上场：比赛桌下方的独立高亮区域，不再压在当前对阵上方 */
 .next-up-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 12px 16px;
-  flex-wrap: wrap;
+  gap: 8px 16px;
   min-width: 0;
-  padding: 9px 14px;
+  padding: 12px 16px;
   border-radius: var(--radius);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--gold);
-  background: linear-gradient(90deg, rgba(227, 178, 91, 0.09), transparent 62%), var(--bg-elev);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gold-line);
+  border-left: 4px solid var(--gold);
+  background:
+    linear-gradient(100deg, rgba(227, 178, 91, 0.14), rgba(227, 178, 91, 0.04) 48%, transparent 78%),
+    var(--bg-elev);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .next-up-bar.empty {
+  border-color: var(--line);
   border-left-color: var(--line-strong);
   background: var(--bg-elev);
+  box-shadow: var(--shadow-sm);
 }
 
 .next-up-bar.waiting { opacity: 0.85; }
@@ -771,6 +832,7 @@ input[type="checkbox"] {
   border-radius: 999px;
   border: 1px solid var(--gold-line);
   background: rgba(227, 178, 91, 0.10);
+  white-space: nowrap;
 }
 
 .next-up-bar.empty .next-up-label { color: var(--muted); border-color: var(--line); background: var(--surface-2); }
@@ -779,9 +841,8 @@ input[type="checkbox"] {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 6px 16px;
+  gap: 6px 18px;
   flex-wrap: wrap;
-  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -789,16 +850,16 @@ input[type="checkbox"] {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 4px 10px;
+  gap: 4px 12px;
   min-width: 0;
 }
 
 .next-up-name {
-  font-size: clamp(18px, 1.6vw, 23px);
+  font-size: clamp(18px, 1.55vw, 23px);
   font-weight: 780;
   letter-spacing: 0.3px;
   line-height: 1.15;
-  color: var(--text-2);
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 
@@ -806,11 +867,11 @@ input[type="checkbox"] {
 
 .next-up-meta { color: var(--muted); font-size: 11.5px; line-height: 1.35; overflow-wrap: anywhere; }
 
-.next-up-empty { flex: 1 1 auto; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.next-up-empty { min-width: 0; color: var(--muted); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
 
 .arena-wrap { display: grid; gap: 12px; min-width: 0; }
 
-.arena-card .card-hd { padding: 10px 14px; }
+.arena-card .card-hd { padding: 9px 14px; }
 
 .arena-card .card-bd { padding: 12px; }
 
@@ -818,28 +879,36 @@ input[type="checkbox"] {
 
 .arena-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 12px;
   align-items: stretch;
 }
 
 .arena-grid.single { grid-template-columns: minmax(0, 1fr); }
 
-.table-card .card-hd { padding: 8px 12px; }
+.table-card .card-hd { padding: 7px 12px; }
 
 .table-card .card-bd { padding: 10px 12px; }
 
-.table-card .player-box { padding: 10px 12px; }
-
-.table-card .player-box .name { font-size: clamp(19px, 1.7vw, 25px); }
-
-.table-card .vs { margin: 6px 0; }
-
-.table-card .win-actions { margin-top: 10px; gap: 8px; }
-
-.table-card .win-actions .btn { min-height: 46px; font-size: 15px; padding: 8px 10px; }
-
 .table-card .match-panel { min-width: 0; }
+
+.table-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.table-heading .table-no { font-size: 15px; }
+
+.table-undo {
+  flex: 0 0 auto;
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.table-card .empty-state { padding: 18px 10px; }
 
 /* 选手区 */
 .checkline {
@@ -970,7 +1039,17 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   box-shadow: 0 0 10px rgba(227, 178, 91, 0.65);
 }
 
-.match-panel { display: flex; flex-direction: column; gap: 0; }
+/*
+ * 当前对阵：两位选手并排，中间一个紧凑 VS。
+ * 每位选手的「获胜」按钮直接放在自己的卡片内，裁判视线不用上下找按钮。
+ */
+.match-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
 
 .player-box {
   padding: 14px 16px;
@@ -993,17 +1072,69 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
 
 .player-box .row { margin-top: 10px; }
 
+/* 选手卡：信息在上，获胜按钮在下，两张卡等高 */
+.player-box.duelist {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 13px;
+  background: linear-gradient(180deg, var(--surface), var(--bg-elev) 72%);
+  overflow: hidden;
+}
+
+.duelist-info { min-width: 0; }
+
+.table-card .player-box.duelist .name {
+  font-size: clamp(17px, 1.5vw, 23px);
+  line-height: 1.16;
+  overflow-wrap: anywhere;
+}
+
+.table-card .player-box.duelist .py {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.duelist-meta {
+  margin-top: 6px !important;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.duelist-meta .badge { font-size: 10.5px; padding: 2px 7px; }
+
+.duelist .win-btn {
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.22;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .vs {
   align-self: center;
-  margin: 10px 0;
-  padding: 2px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 2px;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--gold-line);
+  background: rgba(227, 178, 91, 0.08);
+  color: var(--gold);
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  line-height: 1;
 }
 
 .win-actions {
@@ -1373,9 +1504,6 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
 /* 1366 档：只把比赛桌姓名略微放大，仍严格保证一屏看完 */
 @media (min-width: 1280px) and (max-width: 1439px) {
   .mini-player .name { font-size: 22px; }
-
-  /* 单级别页操作收成一行，给首屏的桌卡与获胜按钮留出高度 */
-  .level-hero-actions { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 }
 
 /*
@@ -1557,8 +1685,6 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   .level-layout.is-started,
   .level-layout.is-waiting { grid-template-columns: minmax(0, 1fr); }
 
-  .level-hero-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-
   .content { padding: 18px 16px 48px; }
 
   .topbar-inner {
@@ -1612,31 +1738,99 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   .win-actions { grid-template-columns: 1fr; }
   .win-actions .btn { min-height: 50px; font-size: 15.5px; }
 
-  /* 手机：首屏保留桌卡与下一组；操作按钮四列两行，不横滚 */
+  /* 手机头部：标题/状态一行，统计一行，操作三列，危险操作独占一行 */
   .level-hero-compact .card-bd { padding: 10px 12px; }
 
-  .level-hero-top { align-items: flex-start; }
+  .level-hero-main { gap: 6px 10px; }
 
-  .level-hero-stats { gap: 6px 10px; font-size: 12px; }
+  .level-back-btn { min-height: 36px; }
+
+  .level-hero .title,
+  .level-title { font-size: 21px; }
+
+  .level-hero-stats {
+    flex: 1 1 100%;
+    margin-left: 0;
+    gap: 4px 10px;
+    font-size: 12px;
+  }
 
   .level-progress-inline { width: 84px; }
 
-  .level-hero-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+  .level-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+  }
 
-  .level-hero-actions .btn { min-height: 40px; font-size: 12.5px; padding: 4px 6px; }
+  .level-toolbar-group { display: contents; }
 
-  .next-up-bar { padding: 8px 10px; gap: 8px 10px; }
+  .level-toolbar .btn {
+    min-width: 0;
+    min-height: 42px;
+    padding: 5px 6px;
+    font-size: 12.5px;
+    white-space: normal;
+  }
 
-  .next-up-main { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .level-toolbar-danger-zone {
+    grid-column: 1 / -1;
+    margin: 2px 0 0;
+    padding: 8px 0 0;
+    border-left: 0;
+    border-top: 1px dashed rgba(240, 122, 122, 0.30);
+  }
 
-  .next-up-name { font-size: 18px; }
+  .toolbar-danger { width: 100%; min-height: 42px; }
 
-  .next-up-meta { font-size: 11px; }
+  .next-up-bar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 10px 12px;
+  }
 
-  .arena-grid { grid-template-columns: minmax(0, 1fr); }
+  .next-up-label { justify-self: start; }
+
+  .next-up-main { flex-direction: column; align-items: flex-start; gap: 3px; }
+
+  .next-up-names { gap: 2px 8px; }
+
+  .next-up-name { font-size: 19px; }
+
+  .next-up-meta { font-size: 11.5px; }
+
+  /*
+   * 手机多桌：把比赛区拍平，变成「比赛区标题 → 第一张桌 → 下一组 → 其余桌」。
+   * 当前对阵、获胜按钮和下一组因此落在首屏；其余桌继续按原顺序排在后面。
+   */
+  .arena-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .arena-card,
+  .arena-card .card-bd,
+  .arena-grid { display: contents; }
+
+  .arena-card .card-hd {
+    order: 0;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .arena-grid > .table-card:nth-child(1) { order: 1; }
+
+  .next-up-bar { order: 2; }
+
+  .arena-grid > .table-card:nth-child(n + 2) { order: 3; }
 
   /* 比赛区标题压成一行，副标题让位给桌卡 */
-  .arena-card .card-hd { flex-direction: row; align-items: center; padding: 6px 10px; gap: 8px; }
+  .arena-card .card-hd { flex-direction: row; align-items: center; padding: 7px 10px; gap: 8px; }
 
   .arena-hd .subtitle { display: none; }
 
@@ -1646,61 +1840,82 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
 
   .arena-card .card-bd { padding: 8px; }
 
-  /* 桌卡头部一行：桌子号 + 本桌撤回 */
+  /* 桌卡头部一行：桌子号 + 组别 + 本桌撤回 */
   .table-card .card-hd { flex-direction: row; align-items: center; padding: 6px 10px; gap: 6px; }
 
-  .table-card .table-hd .title { font-size: 15px; }
+  .table-heading { gap: 6px; }
 
-  .table-card .table-hd .subtitle { font-size: 11.5px; }
+  .table-heading .table-no { font-size: 14px; }
 
-  .table-card .table-hd .btn { min-height: 30px; font-size: 11.5px; padding: 2px 8px; }
+  .table-heading .badge { font-size: 10.5px; padding: 2px 6px; }
+
+  .table-card .table-undo {
+    min-height: 36px;
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 11.5px;
+  }
 
   .table-card .card-bd { padding: 8px; }
 
-  .table-card .player-box { padding: 7px 10px; }
-
-  .table-card .player-box .name { font-size: clamp(18px, 5vw, 22px); }
-
-  .table-card .player-box .py { margin-top: 2px; font-size: 11.5px; }
-
-  .table-card .player-box .row { margin-top: 6px !important; }
-
   /*
-   * 手机：两名选手与各自「获胜」按钮并排成两行。
-   * 首屏即可完成结算，不必先滚动过两张选手牌。
+   * 手机：当前对阵不是桌面的缩小版。
+   * 每位选手一行：左侧姓名/战绩，右侧大号获胜按钮；两人之间用 VS 分隔线。
    */
   .table-card .match-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .table-card .player-box.duelist {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(92px, 38%);
-    grid-template-rows: auto auto auto;
+    grid-template-columns: minmax(0, 1fr) minmax(108px, 36%);
     align-items: center;
-    column-gap: 8px;
-    row-gap: 6px;
+    gap: 8px;
+    padding: 8px 10px;
   }
 
-  .table-card .match-panel > .player-box:nth-child(1) { grid-area: 1 / 1; }
+  .table-card .player-box.duelist .name { font-size: clamp(17px, 5vw, 21px); }
 
-  .table-card .match-panel > .player-box:nth-child(3) { grid-area: 3 / 1; }
+  .table-card .player-box.duelist .py { font-size: 11px; }
 
-  .table-card .match-panel > .vs { grid-area: 2 / 1 / 3 / 3; margin: 0; justify-self: center; }
+  .duelist-meta { margin-top: 4px !important; }
 
-  .table-card .match-panel > .win-actions { display: contents; }
+  .duelist-meta .badge { font-size: 10px; padding: 2px 6px; }
 
-  .table-card .match-panel > .win-actions > .win-btn:nth-child(1) { grid-area: 1 / 2; }
-
-  .table-card .match-panel > .win-actions > .win-btn:nth-child(2) { grid-area: 3 / 2; }
-
-  .table-card .match-panel > .win-actions .win-btn {
-    width: 100%;
-    min-height: 52px;
-    font-size: 14px;
+  .duelist .win-btn {
+    min-height: 50px;
     padding: 6px 8px;
-    white-space: normal;
-    line-height: 1.2;
-    align-self: stretch;
+    font-size: 14px;
   }
 
-  .roster-list { max-height: 200px; }
+  .table-card .match-panel > .vs {
+    width: 100%;
+    height: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 9.5px;
+    letter-spacing: 1.5px;
+  }
+
+  .table-card .match-panel > .vs::before,
+  .table-card .match-panel > .vs::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--line);
+  }
+
+  .table-card .empty-state { padding: 16px 8px; }
+
+  .roster-list { max-height: 220px; }
 
   .limit-choice { min-height: 56px; }
 
