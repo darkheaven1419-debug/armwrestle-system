@@ -649,10 +649,49 @@
   }
 
   function renderRankRow(level, p) {
-    const medal = level.finished ? (p.placement === 1 ? '🥇' : p.placement === 2 ? '🥈' : p.placement === 3 ? '🥉' : '') : '';
-    return el('div', { class: 'list-item' }, [
-      el('div', { class: 'stack' }, [el('div', { class: 'name' }, [`${Number.isFinite(p.placement) ? '#' + p.placement : '未决出'} ${medal} ${p.name}`]), el('div', { class: 'py' }, [p.pinyin || ''])]),
+    const decided = Number.isFinite(p.placement);
+    const label = decided ? W.rankingLabel(p.placement) : '未决出';
+    return el('div', {
+      class: `list-item rank-row ${decided ? 'rank-decided rank-' + p.placement : 'rank-pending'}`,
+      'data-place': decided ? p.placement : null,
+      'data-status': decided ? 'decided' : 'pending',
+    }, [
+      el('div', { class: 'stack' }, [
+        el('div', { class: 'name rank-line' }, [
+          decided
+            ? el('span', { class: 'rank-label' }, [label])
+            : el('span', { class: 'rank-state' }, [label]),
+          el('span', { class: 'rank-player' }, [p.name]),
+        ]),
+        el('div', { class: 'py' }, [p.pinyin || '']),
+      ]),
       el('span', { class: `badge ${p.losses >= 2 || p.eliminatedAt ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [W.isWithdrawn(level, p) ? '退赛' : `${Math.min(2, p.losses)}/2`]),
+    ]);
+  }
+
+  /* 「实时名次」的一行：名次名称 + 已确定的选手姓名，或「未决出」。 */
+  function renderRankingRow(entry) {
+    const decided = entry.status === 'decided';
+    const badge = decided
+      ? el('span', { class: `badge ${entry.losses >= 2 ? 'danger' : entry.losses === 1 ? 'warn' : 'ok'}` }, [entry.withdrawn ? '退赛' : `${Math.min(2, entry.losses)}/2`])
+      : el('span', { class: 'badge rank-pending-badge' }, ['—']);
+    return el('div', {
+      class: `list-item rank-row ${decided ? 'rank-decided rank-' + entry.place : 'rank-pending'}`,
+      role: 'listitem',
+      'data-place': entry.place,
+      'data-status': entry.status,
+      'aria-label': decided ? `${entry.label} ${entry.name}` : `${entry.label} 未决出`,
+    }, [
+      el('div', { class: 'stack' }, [
+        el('div', { class: 'name rank-line' }, [
+          el('span', { class: 'rank-label' }, [entry.label]),
+          decided
+            ? el('span', { class: 'rank-player' }, [entry.name])
+            : el('span', { class: 'rank-state' }, ['未决出']),
+        ]),
+        decided && entry.pinyin ? el('div', { class: 'py' }, [entry.pinyin]) : null,
+      ]),
+      badge,
     ]);
   }
 
@@ -665,15 +704,22 @@
   }
 
   function openRankingModal(level) {
-    W.computePlacements(level);
-    const ps = Object.values(level.players).filter((p) => p.name), total = ps.length;
-    const byPlace = new Map(); for (const p of ps) { if (Number.isFinite(p.placement)) byPlace.set(p.placement, p); }
+    const rows = W.getRankingView(level);
+    const total = rows.length;
     const body = document.createElement('div');
-    body.appendChild(el('div', { class: 'subtitle' }, [level.finished ? '已结束。' : `进行中：第1→第${total}名。`]));
+    body.appendChild(el('div', { class: 'subtitle' }, [
+      level.finished
+        ? '已结束。名次由比赛引擎计算。'
+        : level.started
+          ? '进行中：已确定的名次显示选手姓名，其余显示「未决出」。'
+          : '尚未开始：所有名次均未决出。',
+    ]));
     body.appendChild(el('div', { class: 'hr' }));
-    const rows = [];
-    for (let place = 1; place <= total; place++) { const p = byPlace.get(place); rows.push(p ? renderRankRow(level, p) : el('div', { class: 'list-item' }, [el('div', { class: 'stack' }, [el('div', { class: 'name' }, [`#${place} 未决出`])]), el('span', { class: 'badge' }, ['—'])])); }
-    body.appendChild(el('div', { class: 'list' }, rows));
+    if (!total) {
+      body.appendChild(el('div', { class: 'empty-state' }, ['暂无选手，请先添加选手。']));
+    } else {
+      body.appendChild(el('div', { class: 'list ranking-list', role: 'list', 'data-total': total }, rows.map((entry) => renderRankingRow(entry))));
+    }
     openModal({ title: '实时名次', bodyEl: body, footerEl: el('div', {}, [el('button', { class: 'btn', onclick: closeModal }, ['关闭'])]) });
   }
 

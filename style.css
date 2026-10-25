@@ -602,6 +602,53 @@ input[type="checkbox"] {
   overflow-wrap: anywhere;
 }
 
+/* 实时名次：名次名称与「未决出」 */
+.ranking-list { gap: 8px; }
+.rank-row { gap: 12px; }
+.rank-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.rank-label {
+  flex: none;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+}
+.rank-player { min-width: 0; overflow-wrap: anywhere; }
+.rank-state {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.rank-row.rank-decided.rank-1 {
+  border-color: var(--gold-line);
+  background: linear-gradient(135deg, var(--gold-dim), var(--bg-elev) 62%);
+}
+.rank-row.rank-decided.rank-1 .rank-label { color: var(--gold-strong); }
+.rank-row.rank-decided.rank-2 { border-color: rgba(219, 226, 238, 0.26); }
+.rank-row.rank-decided.rank-2 .rank-label { color: #dbe2ee; }
+.rank-row.rank-decided.rank-3 { border-color: rgba(217, 160, 107, 0.3); }
+.rank-row.rank-decided.rank-3 .rank-label { color: #d9a06b; }
+.rank-pending { border-style: dashed; }
+.rank-pending .badge { opacity: 0.6; }
+
+@media (max-width: 640px) {
+  .rank-line { gap: 6px; }
+  .rank-state { font-size: 11px; }
+}
+
 /* 空状态 */
 .empty-state {
   padding: 36px 20px;
@@ -1798,6 +1845,16 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   }
 
   .list-item > .row:last-child { justify-content: flex-end; }
+
+  /* 名次行保持「名次 + 姓名 / 徽标」单行布局，避免徽标被拉成整行 */
+  .list-item.rank-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px;
+  }
+  .rank-row .stack { flex: 1 1 auto; }
+  .rank-row .badge { flex: 0 0 auto; }
 
   .page-title { font-size: 23px; }
 

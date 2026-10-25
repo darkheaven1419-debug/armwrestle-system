@@ -196,6 +196,73 @@
     }
   };
 
+  /*
+   * 名次展示用的中文序数。名次本身只来自上面的 computePlacements，
+   * 这里只负责把 1/2/3 与 4 之后的数字翻译成界面文案。
+   */
+  const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  const CN_UNITS = ['', '十', '百', '千'];
+  function chineseNumeral(n) {
+    const digits = String(n).split('').map(Number);
+    let out = '';
+    let pendingZero = false;
+    for (let i = 0; i < digits.length; i++) {
+      const d = digits[i];
+      if (d === 0) {
+        if (out) pendingZero = true;
+        continue;
+      }
+      if (pendingZero) { out += '零'; pendingZero = false; }
+      out += CN_DIGITS[d] + CN_UNITS[digits.length - i - 1];
+    }
+    return out.replace(/^一十/, '十');
+  }
+
+  W.rankingLabel = function rankingLabel(place) {
+    const n = Number(place);
+    if (!Number.isInteger(n) || n < 1) return '未决出';
+    if (n === 1) return '🥇 冠军';
+    if (n === 2) return '🥈 亚军';
+    if (n === 3) return '🥉 季军';
+    // 当前参赛人数上限远低于一万；超出时仍给出可读文案，绝不返回 undefined。
+    if (n >= 10000) return `第${n}名`;
+    return `第${chineseNumeral(n)}名`;
+  };
+
+  /*
+   * 完整名次表：每个名次位置都先占位。
+   * - 只有 computePlacements 已写入 placement 的选手才算“已确定”；
+   * - 存活选手没有 placement，因此不会被当成临时名次显示；
+   * - 行数始终等于当前参赛人数，未决出的位置保留为空位。
+   */
+  W.getRankingView = function getRankingView(level) {
+    if (!level || !level.players) return [];
+    W.computePlacements(level);
+    const players = Object.values(level.players);
+    const total = players.length;
+    const byPlace = new Map();
+    for (const p of players) {
+      if (Number.isInteger(p.placement) && p.placement >= 1 && p.placement <= total) {
+        byPlace.set(p.placement, p);
+      }
+    }
+    const rows = [];
+    for (let place = 1; place <= total; place++) {
+      const p = byPlace.get(place);
+      rows.push({
+        place,
+        label: W.rankingLabel(place),
+        status: p ? 'decided' : 'pending',
+        playerId: p ? p.id : null,
+        name: p ? p.name : null,
+        pinyin: p ? (p.pinyin || '') : '',
+        losses: p ? p.losses : null,
+        withdrawn: p ? W.isWithdrawn(level, p) : false,
+      });
+    }
+    return rows;
+  };
+
   /* ---- 导入校验与归一化 ---- */
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
   const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
