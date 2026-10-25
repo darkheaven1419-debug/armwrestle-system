@@ -594,7 +594,8 @@
     ]);
 
     // 完整名单放进可折叠滚动区，长名单不会把页面撑高
-    const roster = el('details', { class: 'card roster-card' }, [
+    // 空级别把名单区展开，清空后首屏能直接看到“暂无选手”的空状态。
+    const roster = el('details', { class: 'card roster-card', open: total ? undefined : '' }, [
       el('summary', { class: 'roster-summary' }, [
         el('span', { class: 'title' }, ['完整名单']),
         el('span', { class: 'badge' }, [`${total} 人`]),
@@ -609,7 +610,7 @@
             el('span', { class: `badge ${isElim ? 'danger' : p.losses === 1 ? 'warn' : 'ok'}` }, [W.isWithdrawn(level, p) ? '退赛' : isElim ? '淘汰' : `${p.losses}/2`]),
           ]);
         }).filter(Boolean)
-        : el('div', { class: 'empty-state' }, ['还没有选手，先在上方录入。'])),
+        : [el('div', { class: 'empty-state' }, ['暂无选手，请添加选手。'])]),
     ]);
 
     const summary = el('div', { class: 'card player-state-card' }, [

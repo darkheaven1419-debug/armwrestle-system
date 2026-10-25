@@ -22,7 +22,10 @@
   };
 
   W.el = function el(tag, attrs, children) {
-    attrs = attrs || {}; children = children || [];
+    attrs = attrs || {};
+    // children 既支持数组，也支持单个节点/文本；null/undefined 视为无子节点。
+    if (children === null || children === undefined) children = [];
+    else if (!Array.isArray(children)) children = [children];
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
       if (k === 'class') e.className = v;
@@ -31,8 +34,10 @@
       else if (v !== undefined && v !== null) e.setAttribute(k, String(v));
     }
     for (const c of children) {
-      if (c === null || c === undefined) continue;
-      e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+      if (c === null || c === undefined || c === false) continue;
+      if (typeof c === 'string' || typeof c === 'number') e.appendChild(document.createTextNode(String(c)));
+      else if (c && typeof c.nodeType === 'number') e.appendChild(c);
+      else throw new TypeError('el() children must be arrays, nodes, strings, numbers, null or undefined');
     }
     return e;
   };
