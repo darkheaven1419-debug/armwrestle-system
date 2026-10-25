@@ -90,6 +90,8 @@
       // 添加选手后自动打乱种子顺序（默认开启，可随时关闭）
       autoShuffle: opts.autoShuffle === undefined ? true : !!opts.autoShuffle,
       started: false, finished: false, players: {}, playerOrder: [],
+      // 当前胜者组轮次（首轮为 1）；与败者组 stage 一起构成阶段闸门
+      wRound: 0,
       pendingMatches: [], tables: [], history: [], undoStack: [],
       banners: { top8Shown: false, top3Shown: false, gfShown: false }, grandFinal: null,
     };
@@ -97,7 +99,10 @@
 
   W.createPlayer = function createPlayer(name) {
     const clean = truncateName(name, 30);
-    return { id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0, eliminatedAt: null, eliminatedSeq: null, placement: null, bracket: 'W' };
+    return {
+      id: uid(), name: clean, pinyin: getPinyin(clean), losses: 0,
+      eliminatedAt: null, eliminatedSeq: null, dropRound: null, placement: null, bracket: 'W',
+    };
   };
 
   /* ---- 查询辅助 ---- */
@@ -233,6 +238,7 @@
       losses: clampInt(numOr(raw.losses, 0), 0, 2),
       eliminatedAt: numOr(raw.eliminatedAt, null),
       eliminatedSeq: typeof raw.eliminatedSeq === 'number' && Number.isFinite(raw.eliminatedSeq) ? raw.eliminatedSeq : null,
+      dropRound: typeof raw.dropRound === 'number' && Number.isFinite(raw.dropRound) ? raw.dropRound : null,
       placement: typeof raw.placement === 'number' && Number.isFinite(raw.placement) ? raw.placement : null,
       bracket,
     };
@@ -249,6 +255,8 @@
       p1: raw.p1,
       p2: raw.p2,
       tableNo: typeof raw.tableNo === 'number' ? raw.tableNo : null,
+      round: bracket === 'W' && typeof raw.round === 'number' && Number.isFinite(raw.round) ? raw.round : null,
+      stage: bracket === 'L' && typeof raw.stage === 'number' && Number.isFinite(raw.stage) ? raw.stage : null,
     };
   }
 
@@ -316,6 +324,37 @@
     level.pendingMatches = rawPending.map((m) => normalizeMatch(m, players)).filter(Boolean);
     if (level.pendingMatches.length !== rawPending.length) {
       warnings.push(`「${level.name}」有 ${rawPending.length - level.pendingMatches.length} 场待赛对阵无效，已移除`);
+    }
+
+    /*
+     * 阶段元数据迁移：
+     * - 旧数据没有 wRound/round：所有已存在的 W 比赛视为第 1 轮；
+     * - 旧数据没有 dropRound：已进入败者组（或已负场）的选手按当前轮次补齐；
+     * - 旧 L 对阵没有 stage：按双方 dropRound 计算。
+     * 缺失信息只会让败者组多等一轮，不会提前开打。
+     */
+    const allMatches = level.pendingMatches.slice();
+    for (const t of level.tables) if (t.match) allMatches.push(t.match);
+    let maxWRound = 0;
+    for (const m of allMatches) {
+      if (m.bracket !== 'W') continue;
+      if (!Number.isFinite(m.round)) m.round = 1;
+      if (m.round > maxWRound) maxWRound = m.round;
+    }
+    level.wRound = Math.max(
+      clampInt(numOr(raw.wRound, 0), 0, 999),
+      maxWRound,
+      level.started ? 1 : 0,
+    );
+    for (const p of Object.values(players)) {
+      if (p.dropRound == null && (p.bracket === 'L' || p.losses > 0)) {
+        p.dropRound = level.wRound || 1;
+      }
+    }
+    for (const m of level.pendingMatches) {
+      if (m.bracket !== 'L' || Number.isFinite(m.stage)) continue;
+      const a = players[m.p1].dropRound, b = players[m.p2].dropRound;
+      m.stage = Math.max(1, a == null ? 1 : a, b == null ? 1 : b);
     }
 
     level.history = (Array.isArray(raw.history) ? raw.history : [])

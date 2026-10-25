@@ -84,6 +84,55 @@ test('导入校验：旧版导出缺可选字段也能导入，并修复顺序',
   assert.equal(level.banners.top8Shown, false);
 });
 
+test('导入旧版进行中赛事：补齐胜者组轮次与败者组阶段，且不会提前开打', () => {
+  const { W } = createApp();
+  const data = {
+    version: 1,
+    tournaments: [{
+      name: '旧赛事',
+      levels: [{
+        name: '旧级别',
+        started: true,
+        maxTables: 1,
+        players: {
+          a: { name: '甲', bracket: 'W', losses: 0 },
+          b: { name: '乙', bracket: 'L', losses: 1 },
+          c: { name: '丙', bracket: 'L', losses: 1 },
+          d: { name: '丁', bracket: 'W', losses: 0 },
+        },
+        playerOrder: ['a', 'b', 'c', 'd'],
+        tables: [{ match: null }],
+        pendingMatches: [
+          { p1: 'a', p2: 'd', bracket: 'W' },
+          { p1: 'b', p2: 'c', bracket: 'L' },
+        ],
+      }],
+    }],
+  };
+
+  const result = W.normalizeState(data);
+  assert.equal(result.error, undefined);
+  const level = result.state.tournaments[0].levels[0];
+  assert.equal(level.wRound, 1, '缺少 wRound 时至少视为第 1 轮');
+  assert.equal(level.pendingMatches[0].round, 1, '旧 W 对阵按第 1 轮补齐');
+  assert.equal(level.pendingMatches[1].stage, 1, '旧 L 对阵按双方 dropRound 补齐');
+  assert.equal(level.players.b.dropRound, 1);
+  assert.equal(level.players.c.dropRound, 1);
+
+  assert.equal(W.isLoserStageReady(level, level.pendingMatches[1]), false,
+    '同阶段 W 尚未完成时，旧数据中的 L 也不能开打');
+  W.fillTables(level);
+  assert.equal(level.tables[0].match.bracket, 'W');
+  assert.equal(level.pendingMatches.length, 1);
+
+  W.resolveMatch(level, 1, 'a');
+  assert.equal(level.players.d.dropRound, 1);
+  W.generateMatchesIfNeeded(level);
+  W.fillTables(level);
+  assert.ok(level.tables[0].match, 'W 第 1 轮完成后，阶段 1 的 L 应能上场');
+  assert.equal(level.tables[0].match.bracket, 'L');
+});
+
 test('导入校验：丢弃指向不存在选手的对阵与总决赛，不污染原型', () => {
   const { W } = createApp();
   const data = {
