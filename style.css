@@ -1253,7 +1253,7 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   font-size: 13.5px;
 }
 
-.mini-fill-btn { min-height: 34px; font-size: 13px; }
+.mini-start-btn { min-height: 34px; font-size: 13px; }
 
 /* 三桌控制台：下一组上场独立成块，位于比赛桌与操作下方 */
 .mini-next {
@@ -1425,7 +1425,7 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
   .mini-vs { font-size: 11px; }
   .mini-win-actions { gap: 8px; }
   .mini-win-actions .btn { min-height: 50px; padding: 8px 10px; font-size: 15px; }
-  .mini-fill-btn { min-height: 40px; font-size: 14px; }
+  .mini-start-btn { min-height: 40px; font-size: 14px; }
 }
 
 @media (max-width: 1279px) {

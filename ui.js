@@ -348,11 +348,10 @@
       ]),
       el('div', { class: 'card-bd mini-level-bd' }, [
         renderMiniTableControl(level, 1),
-        el('button', { class: 'btn ok block mini-fill-btn', 'data-action': 'fill', 'data-level-id': level.id, onclick: () => {
-          if (!level.started) { processEvents(W.startLevel(level), level); }
-          else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); }
-          W.saveState(); W.render(); // C4
-        } }, [level.started ? '补充对阵' : '开始比赛（1桌）']),
+        !level.started ? el('button', { class: 'btn ok block mini-start-btn', 'data-action': 'start-level', 'data-level-id': level.id, onclick: () => {
+          processEvents(W.startLevel(level), level);
+          W.saveState(); W.render();
+        } }, ['开始比赛（1桌）']) : null,
         // 真实比赛桌已显示当前双方，控制台不再重复「当前对阵」，只保留下方下一组区域
         renderMiniNextUp(level),
       ]),
@@ -457,7 +456,9 @@
         ]),
       ]),
       el('div', { class: 'actions level-hero-actions' }, [
-        el('button', { class: 'btn primary', 'data-action': 'start-or-fill', onclick: () => { if (!level.started) { processEvents(W.startLevel(level), level); } else { processEvents(W.generateMatchesIfNeeded(level), level); W.fillTables(level); } W.saveState(); W.render(); } }, [level.started ? '补充对阵' : '开始比赛']),
+        !level.started
+          ? el('button', { class: 'btn primary', 'data-action': 'start-level', onclick: () => { processEvents(W.startLevel(level), level); W.saveState(); W.render(); } }, ['开始比赛'])
+          : null,
         el('button', { class: 'btn', onclick: () => openPlayerListModal(level) }, ['选手列表']),
         el('button', { class: 'btn', onclick: () => openRankingModal(level) }, ['实时名次']),
         el('button', { class: 'btn', onclick: () => { if (!level.started) { W.toast('尚未开始'); return; } const msg = W.undoLast(level, 'global'); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['全局撤回']),
