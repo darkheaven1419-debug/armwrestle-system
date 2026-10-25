@@ -1348,25 +1348,6 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
 
 .mini-next.waiting .mini-next-name { color: var(--text-2); }
 
-/* 未开赛时比赛桌没有对阵：让排桌入口占据桌面高度，而不是在桌底留洞 */
-.mini-details {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-}
-
-.mini-details summary {
-  cursor: pointer;
-  padding: 5px 2px;
-  color: var(--muted);
-  font-size: 12px;
-  user-select: none;
-}
-
-.mini-details[open] summary { color: var(--text-2); }
-
-.mini-details .table-card { margin-top: 8px; }
-
 .mini-champion {
   display: flex;
   flex: 1 1 auto;

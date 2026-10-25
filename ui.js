@@ -393,10 +393,7 @@
         ? el('div', { class: 'mini-champion' }, [el('span', { class: 'mini-medal' }, ['🥇']), el('strong', {}, [champ.name])])
         : el('div', { class: 'mini-idle' }, ['比赛已结束']);
     } else {
-      body = el('details', { class: 'mini-details' }, [
-        el('summary', {}, ['手动排桌 / 完整桌面']),
-        renderTable(level, tableNo, { compact: true }),
-      ]);
+      body = el('div', { class: 'mini-idle' }, [idleTableText(level)]);
     }
     const status = match ? `进行中 · ${bracketLabel(match.bracket)}` : level.finished ? '已结束' : '空闲';
     return el('section', { class: 'mini-stage' + (match ? ' live' : ''), 'data-table-no': tableNo }, [
@@ -765,8 +762,11 @@
     ]);
   }
 
-  function renderTable(level, tableNo, opts) {
-    opts = opts || {};
+  function idleTableText(level) {
+    return level.started ? '空闲，等待自动排桌。' : '开始比赛后将自动排桌。';
+  }
+
+  function renderTable(level, tableNo) {
     const t = level.tables.find((x) => x.tableNo === tableNo), match = t?.match;
     W.computePlacements(level);
     const champ = Object.values(level.players).find((p) => p.placement === 1);
@@ -775,7 +775,7 @@
         el('div', {}, [el('div', { class: 'title table-no' }, [`桌子 #${tableNo}`]), el('div', { class: 'subtitle' }, [match ? (match.bracket === 'W' ? '胜者组' : '败者组') : '空闲'])]),
         el('div', { class: 'row' }, [el('button', { class: 'btn small ghost', 'data-action': 'undo-table', 'data-table-no': tableNo, onclick: () => { if (!level.started) return W.toast('开始后才能撤回'); const msg = W.undoLast(level, `table:${tableNo}`); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['本桌撤回'])]),
       ]),
-      el('div', { class: 'card-bd' }, [match ? renderMatchPanel(level, tableNo, match) : (level.finished && champ ? renderChampionPanel(champ) : renderManualAssign(level, tableNo))]),
+      el('div', { class: 'card-bd' }, [match ? renderMatchPanel(level, tableNo, match) : (level.finished && champ ? renderChampionPanel(champ) : el('div', { class: 'empty-state' }, [idleTableText(level)]))]),
     ]);
   }
 
@@ -808,31 +808,6 @@
         el('span', { class: 'badge' }, [p.bracket === 'W' ? '胜者组' : '败者组']),
       ]),
     ]);
-  }
-
-  // C2: 手动分配自动推断组别
-  function renderManualAssign(level, tableNo) {
-    const alive = W.alivePlayers(level);
-    const opts = alive.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}（${p.bracket === 'W' ? '胜' : '败'}｜${p.losses}/2）</option>`).join('');
-    const body = document.createElement('div');
-    body.innerHTML = `<div class="subtitle">空闲桌子：手动指定两名存活选手比赛。组别自动根据负场数推断。</div><div class="hr"></div><div class="grid cols-2"><div class="field"><label>选手 A</label><select class="select" id="aSel"><option value="">请选择</option>${opts}</select></div><div class="field"><label>选手 B</label><select class="select" id="bSel"><option value="">请选择</option>${opts}</select></div></div><div class="hint" style="margin-top:10px;">两名选手将以各自当前负场数对应的组别进行比赛（0负→胜者组，1负→败者组）。</div><div style="margin-top:10px;"><button class="btn primary block" id="assignBtn">分配到本桌</button></div>`;
-    body.querySelector('#assignBtn').onclick = () => {
-      if (!level.started) return W.toast('请先开始比赛');
-      const a = body.querySelector('#aSel').value, b = body.querySelector('#bSel').value;
-      if (!a || !b || a === b) return W.toast('请选两名不同选手');
-      const pa = level.players[a], pb = level.players[b];
-      if (!pa || !pb) return;
-      if (pa.losses >= 2 || pb.losses >= 2 || pa.eliminatedAt || pb.eliminatedAt) return W.toast('淘汰/退赛选手不可参赛');
-      const t = level.tables.find((x) => x.tableNo === tableNo);
-      if (!t || t.match) return W.toast('本桌已有比赛，无法分配');
-      // C2: 自动推断组别——只有确实分配到本桌时才改选手组别
-      const br = (pa.losses === 0 && pb.losses === 0) ? 'W' : 'L';
-      if (W.pushUndoSnapshot) { W.pushUndoSnapshot(level, `table:${tableNo}`); W.pushUndoSnapshot(level, 'global'); }
-      pa.bracket = br; pb.bracket = br;
-      t.match = { id: W.uid(), createdAt: W.now(), bracket: br, p1: a, p2: b, tableNo };
-      W.saveState(); W.render();
-    };
-    return body;
   }
 
   function openHistoryModal(level) {
