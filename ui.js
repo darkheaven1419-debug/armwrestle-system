@@ -78,7 +78,6 @@
   W.render = function render() {
     const route = W.state.ui.route || { name: 'home' };
     renderTopActions(route); appRoot.innerHTML = '';
-    appRoot.classList.remove('level-fill');
     if (route.name === 'home') renderHome();
     else if (route.name === 'tournament') renderTournament(route.tournamentId);
     else if (route.name === 'level') renderLevel(route.tournamentId, route.levelId);
@@ -427,15 +426,8 @@
     const wrap = el('div', { class: 'grid' }, []);
     wrap.appendChild(renderLevelHeader(tournamentId, tournament, level));
     wrap.appendChild(renderLevelBody(tournamentId, tournament, level));
-    // 进行中的级别：把“标题以下”的剩余视口高度交给比赛工作区，桌面端不提前结束。
-    const live = level.started && !level.finished;
-    const fill = live && level.tables.length > 0;
+    // 比赛区按内容高度展开；页面剩余空白留在文档末尾，不再强行拉高选手卡。
     wrap.classList.add('level-page');
-    if (live) wrap.classList.add('level-page-live');
-    if (fill) {
-      wrap.classList.add('level-page-fill');
-      appRoot.classList.add('level-fill');
-    }
     appRoot.appendChild(wrap);
   }
 
