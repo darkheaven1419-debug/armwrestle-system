@@ -31,10 +31,10 @@ jobs:
           set -euo pipefail
           mkdir -p _site
           cp index.html style.css manifest.webmanifest version.js sw.js \
-             update-core.js update.js utils.js state.js bracket.js ui.js app.js _site/
+             update-core.js update.js utils.js state.js bracket.js situation.js ui.js app.js _site/
           cp -R icons vendor _site/
           for f in index.html sw.js version.js manifest.webmanifest style.css \
-                   utils.js state.js bracket.js ui.js app.js update-core.js update.js \
+                   utils.js state.js bracket.js situation.js ui.js app.js update-core.js update.js \
                    vendor/pinyin-pro.js icons/icon.svg; do
             test -f "_site/$f" || { echo "missing required file: $f"; exit 1; }
           done

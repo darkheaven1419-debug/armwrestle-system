@@ -18,6 +18,8 @@ const W = window.WACAA || {};
       l.tables ||= [];
       l.history ||= [];
       l.undoStack ||= [];
+      l.drawOrder ||= [];
+      l.byes ||= [];
       l.banners ||= { top8Shown: false, top3Shown: false, gfShown: false };
       if (l.maxTables == null) l.maxTables = 3;
       if (l.autoShuffle == null) l.autoShuffle = true;

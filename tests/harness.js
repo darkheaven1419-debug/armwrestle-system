@@ -65,7 +65,7 @@ function createApp(options) {
   sandbox.Math = math;
 
   const context = vm.createContext(sandbox);
-  for (const file of ['utils.js', 'state.js', 'bracket.js']) {
+  for (const file of ['utils.js', 'state.js', 'bracket.js', 'situation.js']) {
     const code = fs.readFileSync(path.join(ROOT, file), 'utf8');
     vm.runInContext(code, context, { filename: file });
   }

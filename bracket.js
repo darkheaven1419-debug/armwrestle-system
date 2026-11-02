@@ -309,6 +309,12 @@
       const byeIdx = Math.floor(Math.random() * pool.length);
       const byeId = pool.splice(byeIdx, 1)[0];
       byeName = level.players[byeId]?.name || null;
+      // 只记录轮空事实；不生成比赛、不增加负场，也不改变配对结果。
+      if (!Array.isArray(level.byes)) level.byes = [];
+      level.byes.push({
+        playerId: byeId, bracket: 'W', round: Math.max(1, level.wRound || 0) + 1,
+        stage: null, at: now(),
+      });
     }
     const round = Math.max(1, level.wRound || 0) + 1;
     level.wRound = round;
@@ -352,6 +358,8 @@
         p.lStage = stage;
         byeName = p.name;
         advanced = 1;
+        if (!Array.isArray(level.byes)) level.byes = [];
+        level.byes.push({ playerId: byeId, bracket: 'L', round: null, stage, at: now() });
       }
     }
     let created = 0;
@@ -429,6 +437,8 @@
         tables: level.tables, history: level.history,
         finished: level.finished, grandFinal: level.grandFinal, banners: level.banners,
         wRound: level.wRound,
+        // 轮空记录随比赛进度一起回滚；抽签编号只在开赛时生成，也一并保存。
+        drawOrder: level.drawOrder, byes: level.byes,
       }),
     });
     if (level.undoStack.length > 60) level.undoStack.shift();
@@ -439,6 +449,9 @@
     level.tables = snap.tables; level.history = snap.history;
     level.finished = snap.finished; level.grandFinal = snap.grandFinal; level.banners = snap.banners;
     if (typeof snap.wRound === 'number') level.wRound = snap.wRound;
+    // 旧快照可能没有这两个字段：保留当前值，避免撤销把编号/轮空清空。
+    if (Array.isArray(snap.drawOrder)) level.drawOrder = snap.drawOrder;
+    if (Array.isArray(snap.byes)) level.byes = snap.byes;
     // 旧快照没有 lStage 时从 dropRound 恢复，避免撤销后阶段闸门失去依据
     for (const p of Object.values(level.players || {})) {
       if (!Number.isFinite(p.lStage)) {
@@ -575,7 +588,7 @@
   }
 
   /* ---- 开始比赛 ---- */
-  W.startLevel = function startLevel(level) {
+  W.startLevel = function startLevel(level, options) {
     const events = [];
     if (Object.keys(level.players).length < 2) return events;
     level.started = true; level.finished = false;
@@ -584,22 +597,42 @@
     // M3: banner 变量名统一
     level.banners = { top8Shown: false, top3Shown: false, gfShown: false };
     level.pendingMatches = []; level.history = []; level.undoStack = []; level.grandFinal = null;
+    level.byes = [];
     for (const p of Object.values(level.players)) {
       p.losses = 0; p.eliminatedAt = null; p.eliminatedSeq = null; p.dropRound = null;
       p.lStage = 0; p.placement = null; p.bracket = 'W';
       if (!p.pinyin) p.pinyin = W.getPinyin(p.name);
     }
-    const want = W.computeTableCount(level);
+    // options.maxTables 只限制本次开赛的实际桌数（多级别固定 1 桌），
+    // 不改 level.maxTables，回到单级别后仍按原设置恢复。
+    const want = W.computeTableCount(level, options && options.maxTables);
     level.tables = [];
     for (let i = 0; i < want; i++) level.tables.push({ tableNo: i + 1, match: null, undo: [] });
-    const seeds = level.playerOrder.slice();
-    const pool = seeds.length ? seeds : Object.keys(level.players);
-    const firstRound = pool.slice();
+    /*
+     * 抽签编号：开赛时按现有随机规则对本级别选手做一次独立抽签。
+     * - 抽签结果同时决定首轮对阵顺序与 1..N 固定编号；
+     * - playerOrder 保持原顺序，不因本次抽签被改写；
+     * - 编号在刷新、打开赛情、撤销比赛后都不重新随机。
+     */
+    const seeds = [];
+    const seedSeen = new Set();
+    for (const id of Array.isArray(level.playerOrder) ? level.playerOrder : []) {
+      if (level.players[id] && !seedSeen.has(id)) { seedSeen.add(id); seeds.push(id); }
+    }
+    for (const id of Object.keys(level.players)) {
+      if (!seedSeen.has(id)) { seedSeen.add(id); seeds.push(id); }
+    }
+    const firstRound = shuffle(seeds);
+    level.drawOrder = firstRound.slice();
     if (firstRound.length % 2 === 1) {
-      const byeIdx = Math.floor(Math.random() * firstRound.length);
-      const byeId = firstRound.splice(byeIdx, 1)[0];
+      // 轮空位固定在抽签后的最后一个编号，保证 1/2、3/4… 两两相邻；
+      // 谁轮空仍由本次随机抽签决定，不按报名顺序内定。
+      const byeId = firstRound.pop();
       const p = level.players[byeId];
-      if (p) events.push({ type: 'bye', name: p.name });
+      if (p) {
+        events.push({ type: 'bye', name: p.name });
+        level.byes.push({ playerId: byeId, bracket: 'W', round: 1, stage: null, at: now() });
+      }
     }
     for (let i = 0; i < firstRound.length; i += 2) {
       level.pendingMatches.push({ id: uid(), createdAt: now(), bracket: 'W', round: 1, p1: firstRound[i], p2: firstRound[i + 1], tableNo: null });

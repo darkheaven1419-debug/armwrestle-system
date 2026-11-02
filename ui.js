@@ -82,6 +82,7 @@
     else if (route.name === 'tournament') renderTournament(route.tournamentId);
     else if (route.name === 'level') renderLevel(route.tournamentId, route.levelId);
     else if (route.name === 'multilevel') renderMultiLevel(route.tournamentId, route.levelIds);
+    else if (route.name === 'situation') renderSituation(route.tournamentId, route.levelId);
     else renderHome();
   };
 
@@ -246,6 +247,7 @@
     return el('div', { class: 'card level-card clickable', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId: level.id }) }, [
       el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, [level.name]), el('div', { class: 'subtitle' }, [`存活：${alive}｜桌上限：${level.maxTables}｜自动：${tableWant}`])]), el('div', { class: 'row' }, [badge])]),
       el('div', { class: 'card-bd' }, [el('div', { class: 'row between' }, [el('div', { class: 'muted' }, [level.started ? (level.finished ? '已结束' : '进行中') : '未开始']), el('div', { class: 'row level-card-tools' }, [
+        el('button', { class: 'btn small', 'data-action': 'situation', 'data-level-id': level.id, title: '查看本级别赛情位置图', onclick: (e) => { e.stopPropagation(); W.setRoute({ name: 'situation', tournamentId, levelId: level.id }); } }, ['赛情']),
         el('button', { class: 'btn small', 'data-action': 'table-limit', 'data-level-id': level.id, title: '直接修改本级别桌数，不需要改名', onclick: (e) => { e.stopPropagation(); openTableLimitFlow(level); } }, [`桌数 ${level.maxTables}`]),
         el('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); editLevelFlow(tournamentId, level.id); } }, ['编辑']),
         el('button', { class: 'btn small danger', onclick: (e) => { e.stopPropagation(); deleteLevelFlow(tournamentId, level.id); } }, ['删除']),
@@ -330,10 +332,14 @@
     const { level } = W.getLevel(tournamentId, levelId); if (!level) return el('div', {}, []);
     level.maxTables = Math.max(level.maxTables, 1);
     if (!level.tables.length) level.tables = [{ tableNo: 1, match: null, undo: [] }];
-    // C1: 安全缩减桌子——比赛回收而非丢弃
-    W.safelyReduceTables(level, 1);
     if (level.started && !level.finished) {
       processEvents(W.generateMatchesIfNeeded(level), level);
+    }
+    // 多级别固定 1 桌：生成后强制收回多余桌子（比赛回到候场队列，
+    // 不删除对阵）；不能放在生成前，否则 adjustTablesToAutoCount 会按
+    // maxTables 再次扩桌。
+    W.safelyReduceTables(level, 1);
+    if (level.started && !level.finished) {
       W.fillTables(level);
       // C4: 生成后保存
       W.saveState();
@@ -351,9 +357,9 @@
         ]),
         el('div', { class: 'actions mini-level-tools' }, [
           el('button', { class: 'btn small', onclick: () => openPlayerListModal(level) }, ['选手']),
+          el('button', { class: 'btn small', 'data-action': 'situation', onclick: () => W.setRoute({ name: 'situation', tournamentId, levelId }) }, ['赛情']),
           el('button', { class: 'btn small', onclick: () => openRankingModal(level) }, ['名次']),
           el('button', { class: 'btn small', onclick: () => openHistoryModal(level) }, ['历史']),
-          el('button', { class: 'btn small', 'data-action': 'table-limit', 'data-level-id': level.id, onclick: () => openTableLimitFlow(level) }, ['桌数']),
           el('button', { class: 'btn small', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛']),
           level.started ? el('button', { class: 'btn small danger', 'data-action': 'reset-level', onclick: () => resetLevelFlow(level) }, ['退回赛前设置']) : null,
           el('button', { class: 'btn small primary', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId }) }, ['进入']),
@@ -362,7 +368,9 @@
       el('div', { class: 'card-bd mini-level-bd' }, [
         renderMiniTableControl(level, 1),
         !level.started ? el('button', { class: 'btn ok block mini-start-btn', 'data-action': 'start-level', 'data-level-id': level.id, onclick: () => {
-          processEvents(W.startLevel(level), level);
+          // 多级别固定 1 桌；只约束本次开赛，level.maxTables 原值保留，
+          // 切回单级别时仍按原设置恢复桌数。
+          processEvents(W.startLevel(level, { maxTables: 1 }), level);
           W.saveState(); W.render();
         } }, ['开始比赛（1桌）']) : null,
         // 真实比赛桌已显示当前双方，控制台不再重复「当前对阵」，只保留下方下一组区域
@@ -425,6 +433,291 @@
     ]);
   }
 
+  /* ==================== 赛情位置图 ==================== */
+  function renderSituation(tournamentId, levelId) {
+    const { tournament, level } = W.getLevel(tournamentId, levelId);
+    if (!tournament || !level) return W.setRoute({ name: 'home' });
+    const model = W.buildSituation(level);
+    const page = el('div', { class: 'grid situation-page', 'data-situation-level-id': level.id }, []);
+    page.appendChild(renderSituationHeader(tournamentId, level, model));
+    if (!model.template.supported) {
+      page.appendChild(el('section', { class: 'card sit-unsupported' }, [
+        el('div', { class: 'card-bd' }, [el('div', { class: 'empty-state' }, [
+          el('strong', {}, ['模板暂不支持']),
+          `当前 ${model.n} 人；本阶段只提供 3–20 人双败淘汰赛模板。`,
+        ])]),
+      ]));
+    } else {
+      if (model.current) page.appendChild(renderSituationCurrent(model));
+      page.appendChild(renderSituationBoard(model));
+      if (model.eliminated.length) page.appendChild(renderSituationEliminated(model));
+      if (model.byes.length) page.appendChild(renderSituationByes(model));
+    }
+    appRoot.appendChild(page);
+  }
+
+  function renderSituationHeader(tournamentId, level, model) {
+    const t = model.template;
+    const status = level.finished ? '已结束' : level.started ? '进行中' : '未开始';
+    const subtitle = t.supported
+      ? `模板：${t.n}人双败淘汰赛表格 · Excel ${t.templateRounds} 轮 · 位置按实际比赛阶段展开`
+      : `当前 ${t.n} 人 · 本阶段仅支持 3–20 人模板`;
+    return el('section', { class: 'card sit-hero' }, [
+      el('div', { class: 'card-hd sit-hero-hd' }, [
+        el('div', {}, [
+          el('div', { class: 'eyebrow' }, ['WACAA · 赛情']),
+          el('div', { class: 'title sit-hero-title' }, [`${level.name} · 赛情`]),
+          el('div', { class: 'subtitle' }, [subtitle]),
+        ]),
+        el('div', { class: 'row sit-hero-tools' }, [
+          el('span', { class: `badge ${level.finished ? 'ok' : level.started ? 'warn' : ''}` }, [status]),
+          el('button', { class: 'btn small', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId: level.id }) }, ['返回级别']),
+        ]),
+      ]),
+      el('div', { class: 'card-bd sit-hero-bd' }, [
+        el('div', { class: 'sit-hero-stats' }, [
+          kpi('编号', level.started ? `1–${model.n}` : '开始后固定'),
+          kpi('胜者组', `${model.wStages.length} 轮`),
+          kpi('败者组', `${model.lStages.length} 阶段`),
+          kpi('已完成', `${level.history.length} 场`),
+        ]),
+        el('div', { class: 'hint' }, [level.started
+          ? '编号在开始比赛时固定；刷新、打开赛情、撤销比赛都不会重新抽签。'
+          : '开始比赛后按当前抽签顺序分配 1–N 编号，并固定到本场赛事结束。']),
+      ]),
+    ]);
+  }
+
+  function renderSituationCurrent(model) {
+    const c = model.current;
+    const player = (p) => el('div', { class: 'sit-current-player', 'data-player-id': p.id }, [
+      el('div', { class: 'sit-current-top' }, [
+        el('span', { class: 'sit-no' }, [p.no ? `#${p.no}` : '#—']),
+        el('span', { class: `badge ${p.losses === 1 ? 'warn' : 'ok'}` }, [`${p.losses}/2`]),
+      ]),
+      el('div', { class: 'sit-current-name', title: p.name }, [p.name]),
+      el('div', { class: 'sit-current-pos' }, [p.positionLabel]),
+    ]);
+    return el('section', {
+      class: 'card sit-current',
+      'data-current-source': c.source,
+      'data-table-no': c.tableNo || '',
+      'aria-live': 'polite',
+    }, [
+      el('div', { class: 'sit-current-hd' }, [
+        el('div', {}, [
+          el('div', { class: 'sit-current-kicker' }, ['当前比赛']),
+          el('div', { class: 'title sit-current-title' }, [c.source === 'grandFinal' ? '总决赛' : `桌子 #${c.tableNo} · ${c.label}`]),
+          c.source !== 'grandFinal' ? el('div', { class: 'subtitle' }, [c.label]) : null,
+        ]),
+        c.extraLive ? el('span', { class: 'badge warn' }, [`另有 ${c.extraLive} 场进行中`]) : null,
+      ]),
+      el('div', { class: 'sit-current-duel' }, [player(c.p1), el('div', { class: 'sit-vs' }, ['VS']), player(c.p2)]),
+      c.source === 'grandFinal' ? el('div', { class: 'sit-current-score' }, [`BO3 比分 ${c.wins1} : ${c.wins2}`]) : null,
+      el('div', { class: 'hint sit-current-note' }, ['本框只提示裁判当前正在对阵的两名选手，不改变胜者组/败者组位置。']),
+    ]);
+  }
+
+  function situationEntryStatus(row) {
+    return 'is-' + (row.status || 'winner');
+  }
+
+  function renderSituationEntry(model) {
+    return el('section', { class: 'sit-entry-panel', style: 'grid-column:1;grid-row:1 / span 2;' }, [
+      el('div', { class: 'sit-panel-hd' }, [
+        el('span', { class: 'title' }, ['选手编号']),
+        el('span', { class: 'badge' }, [`${model.n} 人`]),
+      ]),
+      el('div', { class: 'sit-entry-list' }, model.draw.map((row) => el('div', {
+        class: 'sit-entry-row ' + situationEntryStatus(row),
+        'data-player-id': row.playerId,
+      }, [
+        el('span', { class: 'sit-no' }, [row.no ? `#${row.no}` : '—']),
+        el('span', { class: 'sit-entry-name', title: row.name }, [row.name]),
+        el('span', { class: 'sit-entry-state' }, [row.status === 'current' ? '当前' : row.status === 'eliminated' ? '淘汰' : row.label]),
+      ]))),
+    ]);
+  }
+
+  function renderSituationCard(card) {
+    const cls = 'sit-card'
+      + (card.current ? ' is-current' : '')
+      + (card.bye ? ' has-bye' : '');
+    return el('div', { class: cls, 'data-player-id': card.id, 'data-no': card.no || '' }, [
+      el('div', { class: 'sit-card-top' }, [
+        el('span', { class: 'sit-no' }, [card.no ? `#${card.no}` : '#—']),
+        el('span', { class: `badge ${card.losses === 1 ? 'warn' : 'ok'}` }, [`${card.losses}/2`]),
+      ]),
+      el('div', { class: 'sit-card-name', title: card.name }, [card.name]),
+      card.current ? el('div', { class: 'sit-card-flag current' }, ['当前比赛']) : null,
+      card.bye ? el('div', { class: 'sit-card-flag bye' }, ['轮空晋级']) : null,
+      card.result && !card.current && !(card.bye && card.result === 'waiting')
+        ? el('div', { class: `sit-card-flag ${card.result}` }, [situationResultLabel(card.result)])
+        : null,
+      card.eliminatedHere
+        ? el('div', { class: 'sit-card-flag out' }, ['已淘汰'])
+        : null,
+    ]);
+  }
+
+  function situationResultLabel(result) {
+    if (result === 'win') return '本轮胜';
+    if (result === 'loss') return '本轮负';
+    if (result === 'live') return '进行中';
+    if (result === 'waiting') return '待赛';
+    return '';
+  }
+
+  function renderSituationStage(lane, stage, model) {
+    const isW = lane === 'W';
+    const laneLabel = isW ? '胜者组' : '败者组';
+    const stageLabel = isW ? `第${stage.stage}轮` : `第${stage.stage}阶段`;
+    const byes = model.byes.filter((b) => b.bracket === lane
+      && (isW ? b.round === stage.stage : b.stage === stage.stage));
+    const slots = stage.slots.map((card) => (card
+      ? renderSituationCard(card)
+      : el('div', { class: 'sit-slot pending' }, ['待定'])));
+    const byeEl = stage.byes
+      ? el('div', { class: 'sit-bye-slot' }, byes.length
+        ? byes.map((b) => el('div', { class: 'sit-bye-card' }, [
+          el('span', { class: 'sit-bye-name' }, [`轮空：${b.name}`]),
+          el('span', { class: 'sit-bye-advance' }, [b.advanceLabel]),
+        ]))
+        : [el('div', { class: 'sit-bye-empty' }, ['轮空位 · 待产生'])])
+      : null;
+    return el('section', {
+      class: `sit-stage ${isW ? 'sit-stage-w' : 'sit-stage-l'}`,
+      'data-lane': lane,
+      'data-stage': stage.stage,
+    }, [
+      el('div', { class: 'sit-stage-hd' }, [
+        el('span', { class: `sit-lane-tag ${isW ? 'win' : 'lose'}` }, [laneLabel]),
+        el('span', { class: 'sit-stage-title' }, [stageLabel]),
+        el('span', { class: 'sit-stage-cap' }, [`${stage.capacity} 个位置`]),
+      ]),
+      el('div', { class: 'sit-slots' }, slots),
+      byeEl,
+    ]);
+  }
+
+  function renderEmptySituationStage(index, isLoser) {
+    return el('section', { class: 'sit-stage sit-stage-empty' }, [
+      el('div', { class: 'sit-stage-hd' }, [
+        el('span', { class: `sit-lane-tag ${isLoser ? 'lose' : 'win'}` }, [isLoser ? '败者组' : '胜者组']),
+        el('span', { class: 'sit-stage-title' }, [`阶段 ${index}`]),
+      ]),
+      el('div', { class: 'sit-empty' }, ['—']),
+    ]);
+  }
+
+  function renderSituationFinals(model) {
+    const gf = model.grandFinal;
+    const gfEl = gf
+      ? el('div', { class: `sit-gf ${gf.completed ? 'done' : ''}` }, [
+        el('div', { class: 'sit-gf-hd' }, [
+          el('span', { class: 'sit-lane-tag finals' }, ['总决赛']),
+          el('span', { class: `badge ${gf.completed ? 'ok' : 'warn'}` }, [gf.completed ? '已结束' : '进行中']),
+        ]),
+        el('div', { class: 'sit-gf-names' }, [
+          el('div', {}, [el('span', { class: 'sit-no' }, [gf.no1 ? `#${gf.no1}` : '#—']), gf.name1]),
+          el('span', { class: 'sit-vs' }, ['VS']),
+          el('div', {}, [el('span', { class: 'sit-no' }, [gf.no2 ? `#${gf.no2}` : '#—']), gf.name2]),
+        ]),
+        el('div', { class: 'sit-gf-score' }, [`BO3 ${gf.wins1} : ${gf.wins2}`]),
+        gf.completed ? el('div', { class: 'sit-gf-result' }, [
+          `冠军：${model.rankings.find((r) => r.place === 1)?.name || '未决出'}`,
+        ]) : null,
+      ])
+      : el('div', { class: 'sit-gf empty' }, [
+        el('div', { class: 'sit-gf-hd' }, [el('span', { class: 'sit-lane-tag finals' }, ['总决赛'])]),
+        el('div', { class: 'sit-empty' }, ['待产生']),
+      ]);
+
+    const ranks = el('div', { class: 'sit-rank' }, [
+      el('div', { class: 'sit-rank-hd' }, [
+        el('span', { class: 'title' }, ['最终排名']),
+        el('span', { class: 'badge' }, [`${model.rankings.length} 个名次`]),
+      ]),
+      el('div', { class: 'sit-rank-list' }, model.rankings.map((r) => el('div', {
+        class: `sit-rank-row ${r.status === 'decided' ? 'decided' : 'pending'}`,
+        'data-place': r.place,
+      }, [
+        el('span', { class: 'sit-rank-place' }, [r.label]),
+        el('span', { class: 'sit-rank-name' }, [r.status === 'decided' ? r.name : '未决出']),
+      ]))),
+    ]);
+
+    return el('div', {
+      class: 'sit-finals-panel',
+      style: `grid-column:${model.template.stageColumns + 2};grid-row:1 / span 2;`,
+    }, [gfEl, ranks]);
+  }
+
+  function renderSituationBoard(model) {
+    const stageCount = model.template.stageColumns;
+    const gridStyle = `--sit-stages:${stageCount};`;
+    const grid = el('div', { class: 'sit-board-grid', style: gridStyle }, []);
+    grid.appendChild(renderSituationEntry(model));
+    for (let i = 0; i < stageCount; i += 1) {
+      const w = model.wStages[i];
+      const l = model.lStages[i];
+      const wEl = w ? renderSituationStage('W', w, model) : renderEmptySituationStage(i + 1, false);
+      const lEl = l ? renderSituationStage('L', l, model) : renderEmptySituationStage(i + 1, true);
+      // 胜者组放上半行、败者组放下半行，避免长胜者组把本阶段败者组推到页面底部。
+      wEl.style.gridColumn = String(i + 2);
+      wEl.style.gridRow = '1';
+      lEl.style.gridColumn = String(i + 2);
+      lEl.style.gridRow = '2';
+      grid.appendChild(wEl);
+      grid.appendChild(lEl);
+    }
+    grid.appendChild(renderSituationFinals(model));
+    return el('section', { class: 'card sit-board-card' }, [
+      el('div', { class: 'card-hd' }, [
+        el('div', {}, [
+          el('div', { class: 'title' }, ['位置图']),
+          el('div', { class: 'subtitle' }, ['编号位置、胜者组、败者组、各阶段位置、轮空晋级位与最终排名；未产生的未来位置显示「待定」。']),
+        ]),
+      ]),
+      el('div', { class: 'sit-board-scroll' }, [grid]),
+    ]);
+  }
+
+  function renderSituationEliminated(model) {
+    return el('section', { class: 'card sit-elim-card' }, [
+      el('div', { class: 'card-hd' }, [
+        el('div', {}, [
+          el('div', { class: 'title' }, ['淘汰位置']),
+          el('div', { class: 'subtitle' }, ['累计两负的选手离开胜/败者组位置，名次沿用既有排名结果。']),
+        ]),
+        el('span', { class: 'badge' }, [`${model.eliminated.length} 人`]),
+      ]),
+      el('div', { class: 'card-bd' }, [el('div', { class: 'sit-elim-list' }, model.eliminated.map((row) => el('div', { class: 'sit-elim-row' }, [
+        el('span', { class: 'sit-no' }, [row.no ? `#${row.no}` : '—']),
+        el('span', { class: 'sit-elim-row-name' }, [row.name]),
+        el('span', { class: 'badge' }, [row.label]),
+        el('span', { class: 'hint' }, [`${row.losses}/2 负`]),
+      ])))]),
+    ]);
+  }
+
+  function renderSituationByes(model) {
+    return el('section', { class: 'card sit-byes-card' }, [
+      el('div', { class: 'card-hd' }, [
+        el('div', {}, [
+          el('div', { class: 'title' }, ['轮空晋级记录']),
+          el('div', { class: 'subtitle' }, ['轮空不生成比赛、不增加负场；以下记录来自实际调度。']),
+        ]),
+      ]),
+      el('div', { class: 'card-bd' }, [el('div', { class: 'sit-bye-list' }, model.byes.map((b) => el('div', { class: 'sit-bye-row' }, [
+        el('span', { class: 'sit-no' }, [b.no ? `#${b.no}` : '—']),
+        el('span', { class: 'sit-bye-row-name' }, [b.name]),
+        el('span', { class: 'badge' }, [b.label]),
+        el('span', { class: 'hint' }, [b.advanceLabel]),
+      ])))]),
+    ]);
+  }
+
   /* ==================== 级别页面 ==================== */
   function renderLevel(tournamentId, levelId) {
     const { tournament, level } = W.getLevel(tournamentId, levelId);
@@ -474,6 +767,7 @@
             ? el('button', { class: 'btn primary', 'data-action': 'start-level', onclick: () => { processEvents(W.startLevel(level), level); W.saveState(); W.render(); } }, ['开始比赛'])
             : null,
           el('button', { class: 'btn', onclick: () => openPlayerListModal(level) }, ['选手列表']),
+          el('button', { class: 'btn', 'data-action': 'situation', onclick: () => W.setRoute({ name: 'situation', tournamentId, levelId }) }, ['赛情']),
           el('button', { class: 'btn', onclick: () => openRankingModal(level) }, ['实时名次']),
           el('button', { class: 'btn', onclick: () => { if (!level.started) { W.toast('尚未开始'); return; } const msg = W.undoLast(level, 'global'); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['全局撤回']),
           el('button', { class: 'btn', onclick: () => openHistoryModal(level) }, ['比赛历史']),
@@ -499,6 +793,11 @@
 
   /* 只改桌数，不经过改名流程；已开始级别会先确认再安全调整 */
   function openTableLimitFlow(level) {
+    // 多级别控制台固定每级别 1 桌，不提供桌数设置入口。
+    if (W.state.ui?.route?.name === 'multilevel') {
+      W.toast('多级别模式每个级别固定 1 桌，请回到单级别页面调整桌数');
+      return;
+    }
     let selected = clampInt(level.maxTables, 1, 3);
     const body = document.createElement('div');
     body.appendChild(el('div', { class: 'subtitle' }, [`「${level.name}」的桌数上限。只影响本级别，不需要修改名称。`]));

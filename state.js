@@ -90,6 +90,12 @@
       // 添加选手后自动打乱种子顺序（默认开启，可随时关闭）
       autoShuffle: opts.autoShuffle === undefined ? true : !!opts.autoShuffle,
       started: false, finished: false, players: {}, playerOrder: [],
+      // 开赛时确定的 1..N 抽签编号顺序（只用于赛情展示，不参与调度）；
+      // playerOrder 保存当前报名顺序（若开启自动打乱，则为打乱后的顺序），
+      // 开赛抽签只写入 drawOrder，不改写 playerOrder。
+      drawOrder: [],
+      // 轮空记录：轮空不生成比赛、不增加负场，只记录“从哪一轮/阶段晋级”。
+      byes: [],
       // 当前胜者组轮次（首轮为 1）；与败者组 stage 一起构成阶段闸门
       wRound: 0,
       pendingMatches: [], tables: [], history: [], undoStack: [],
@@ -110,11 +116,13 @@
   W.alivePlayers = (level) => Object.values(level.players).filter((p) => p.losses < 2 && !p.eliminatedAt);
   W.bracketPlayers = (level, bracket) => W.alivePlayers(level).filter((p) => p.bracket === bracket);
 
-  W.computeTableCount = function computeTableCount(level) {
+  W.computeTableCount = function computeTableCount(level, cap) {
     const alive = W.alivePlayers(level).length;
     let want = 1;
     if (alive <= 8) want = 1; else if (alive <= 16) want = 2; else want = 3;
-    return Math.min(level.maxTables, want);
+    // cap 只约束本次计算（多级别固定 1 桌），不修改 level.maxTables。
+    const limit = cap == null ? level.maxTables : clampInt(cap, 1, 3);
+    return Math.min(limit, want);
   };
 
   W.getLevel = function getLevel(tournamentId, levelId) {
@@ -375,6 +383,37 @@
     for (const id of Object.keys(players)) if (!seen.has(id)) order.push(id);
     level.playerOrder = order;
 
+    /*
+     * 抽签编号（1..N）与报名顺序分离：
+     * - 新数据保存了 drawOrder 时只保留有效且不重复的选手；
+     * - 旧数据没有 drawOrder 时按报名顺序补齐，绝不重新随机，
+     *   保证刷新/导入后编号与之前看到的一致。
+     */
+    const draw = [];
+    const drawSeen = new Set();
+    for (const id of Array.isArray(raw.drawOrder) ? raw.drawOrder : []) {
+      if (players[id] && !drawSeen.has(id)) { drawSeen.add(id); draw.push(id); }
+    }
+    for (const id of order) {
+      if (!drawSeen.has(id)) { drawSeen.add(id); draw.push(id); }
+    }
+    level.drawOrder = draw;
+
+    /*
+     * 轮空记录只做展示与撤销恢复，不参与调度。
+     * 旧数据没有该字段时保持空数组；不把普通胜场伪造成轮空。
+     */
+    level.byes = (Array.isArray(raw.byes) ? raw.byes : [])
+      .filter((b) => isObj(b) && players[b.playerId])
+      .slice(0, MAX_PLAYERS_PER_LEVEL * 2)
+      .map((b) => ({
+        playerId: b.playerId,
+        bracket: b.bracket === 'L' ? 'L' : 'W',
+        round: b.bracket !== 'L' && Number.isFinite(b.round) ? Math.max(1, Math.floor(b.round)) : null,
+        stage: b.bracket === 'L' && Number.isFinite(b.stage) ? Math.max(1, Math.floor(b.stage)) : null,
+        at: numOr(b.at, now()),
+      }));
+
     const rawTables = Array.isArray(raw.tables) ? raw.tables.slice(0, 3) : [];
     let badTableMatches = 0;
     level.tables = rawTables.map((rt, i) => {
@@ -514,7 +553,7 @@
 
   function normalizeUi(rawUi) {
     const name = rawUi?.route?.name;
-    const allowed = new Set(['home', 'tournament', 'level', 'multilevel']);
+    const allowed = new Set(['home', 'tournament', 'level', 'multilevel', 'situation']);
     if (!allowed.has(name)) return { route: { name: 'home' } };
     return {
       route: {
@@ -659,6 +698,10 @@
     level.history = [];
     level.undoStack = [];
     level.grandFinal = null;
+    // 抽签编号与轮空记录属于本次比赛进度，退回赛前时一并清除；
+    // 下次开始比赛会重新生成，原始报名顺序 playerOrder 不受影响。
+    level.drawOrder = [];
+    level.byes = [];
     level.banners = { top8Shown: false, top3Shown: false, gfShown: false };
     for (const p of Object.values(players)) {
       p.losses = 0;
@@ -676,6 +719,8 @@
     if (level.started) return;
     delete level.players[playerId];
     level.playerOrder = level.playerOrder.filter((id) => id !== playerId);
+    level.drawOrder = (level.drawOrder || []).filter((id) => id !== playerId);
+    level.byes = (level.byes || []).filter((b) => b.playerId !== playerId);
   };
 
   window.WACAA = W;
