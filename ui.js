@@ -304,6 +304,18 @@
     W.saveState(); W.render();
   }
 
+  /* 退回赛前设置：只对当前级别生效，二次确认后清除比赛进度但保留选手与设置。 */
+  const RESET_LEVEL_CONFIRM = '退回赛前设置后，将清除当前级别的全部比赛进度和比赛结果，但保留选手名单及比赛设置。确定继续吗？';
+
+  function resetLevelFlow(level) {
+    if (!level || !level.started) { W.toast('当前已是赛前设置状态'); return; }
+    if (!confirm(RESET_LEVEL_CONFIRM)) return;
+    if (!W.resetLevelToSetup(level)) return;
+    W.saveState();
+    W.render();
+    W.toast('已退回赛前设置，可补充选手后重新开始');
+  }
+
   /* ==================== 多级别模式 ==================== */
   function renderMultiLevel(tournamentId, levelIds) {
     const t = W.state.tournaments.find((x) => x.id === tournamentId); if (!t) return W.setRoute({ name: 'home' });
@@ -343,6 +355,7 @@
           el('button', { class: 'btn small', onclick: () => openHistoryModal(level) }, ['历史']),
           el('button', { class: 'btn small', 'data-action': 'table-limit', 'data-level-id': level.id, onclick: () => openTableLimitFlow(level) }, ['桌数']),
           el('button', { class: 'btn small', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛']),
+          level.started ? el('button', { class: 'btn small danger', 'data-action': 'reset-level', onclick: () => resetLevelFlow(level) }, ['退回赛前设置']) : null,
           el('button', { class: 'btn small primary', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId }) }, ['进入']),
         ]),
       ]),
@@ -467,6 +480,7 @@
           el('button', { class: 'btn', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['总决赛面板']),
         ]),
         el('div', { class: 'level-toolbar-danger-zone', 'aria-label': '危险操作' }, [
+          level.started ? el('button', { class: 'btn toolbar-danger', 'data-action': 'reset-level', onclick: () => resetLevelFlow(level) }, ['退回赛前设置']) : null,
           el('button', { class: 'btn toolbar-danger', onclick: () => { if (!confirm('确定清空本级别所有数据？')) return; const keep = { id: level.id, name: level.name, maxTables: level.maxTables, autoShuffle: level.autoShuffle, createdAt: level.createdAt }; const fresh = W.createLevel({ name: keep.name, maxTables: keep.maxTables, autoShuffle: keep.autoShuffle }); Object.assign(level, fresh, keep); W.saveState(); W.render(); } }, ['清空本级别']),
         ]),
       ]),
