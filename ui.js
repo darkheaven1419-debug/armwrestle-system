@@ -49,6 +49,23 @@
     W.state.ui.route = route; W.saveState(); W.render();
   };
 
+  /*
+   * 赛情唯一入口：记录来源页，返回时回到刚才的单级别/多级别页面。
+   * 单级别、级别卡片、多级别面板都走这一个函数，避免再出现两套参数。
+   */
+  function openSituation(tournamentId, levelId) {
+    const current = W.state.ui && W.state.ui.route ? W.state.ui.route : null;
+    let from = { name: 'level', tournamentId, levelId };
+    if (current && current.name === 'multilevel') {
+      from = {
+        name: 'multilevel',
+        tournamentId,
+        levelIds: Array.isArray(current.levelIds) ? current.levelIds.slice() : [],
+      };
+    }
+    W.setRoute({ name: 'situation', tournamentId, levelId, from });
+  }
+
   /* ---- 事件处理 ---- */
   // C3: 接受 level 参数，避免从路由取错 level
   function processEvents(events, level) {
@@ -77,6 +94,7 @@
   /* ---- 渲染入口 ---- */
   W.render = function render() {
     const route = W.state.ui.route || { name: 'home' };
+    document.body.classList.toggle('situation-mode', route.name === 'situation');
     renderTopActions(route); appRoot.innerHTML = '';
     if (route.name === 'home') renderHome();
     else if (route.name === 'tournament') renderTournament(route.tournamentId);
@@ -247,7 +265,7 @@
     return el('div', { class: 'card level-card clickable', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId: level.id }) }, [
       el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, [level.name]), el('div', { class: 'subtitle' }, [`存活：${alive}｜桌上限：${level.maxTables}｜自动：${tableWant}`])]), el('div', { class: 'row' }, [badge])]),
       el('div', { class: 'card-bd' }, [el('div', { class: 'row between' }, [el('div', { class: 'muted' }, [level.started ? (level.finished ? '已结束' : '进行中') : '未开始']), el('div', { class: 'row level-card-tools' }, [
-        el('button', { class: 'btn small', 'data-action': 'situation', 'data-level-id': level.id, title: '查看本级别赛情位置图', onclick: (e) => { e.stopPropagation(); W.setRoute({ name: 'situation', tournamentId, levelId: level.id }); } }, ['赛情']),
+        el('button', { class: 'btn small', 'data-action': 'situation', 'data-level-id': level.id, title: '查看本级别赛情位置图', onclick: (e) => { e.stopPropagation(); openSituation(tournamentId, level.id); } }, ['赛情']),
         el('button', { class: 'btn small', 'data-action': 'table-limit', 'data-level-id': level.id, title: '直接修改本级别桌数，不需要改名', onclick: (e) => { e.stopPropagation(); openTableLimitFlow(level); } }, [`桌数 ${level.maxTables}`]),
         el('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); editLevelFlow(tournamentId, level.id); } }, ['编辑']),
         el('button', { class: 'btn small danger', onclick: (e) => { e.stopPropagation(); deleteLevelFlow(tournamentId, level.id); } }, ['删除']),
@@ -357,7 +375,7 @@
         ]),
         el('div', { class: 'actions mini-level-tools' }, [
           el('button', { class: 'btn small', onclick: () => openPlayerListModal(level) }, ['选手']),
-          el('button', { class: 'btn small', 'data-action': 'situation', onclick: () => W.setRoute({ name: 'situation', tournamentId, levelId }) }, ['赛情']),
+          el('button', { class: 'btn small', 'data-action': 'situation', onclick: () => openSituation(tournamentId, levelId) }, ['赛情']),
           el('button', { class: 'btn small', onclick: () => openRankingModal(level) }, ['名次']),
           el('button', { class: 'btn small', onclick: () => openHistoryModal(level) }, ['历史']),
           el('button', { class: 'btn small', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛']),
@@ -437,23 +455,373 @@
   function renderSituation(tournamentId, levelId) {
     const { tournament, level } = W.getLevel(tournamentId, levelId);
     if (!tournament || !level) return W.setRoute({ name: 'home' });
-    const model = W.buildSituation(level);
-    const page = el('div', { class: 'grid situation-page', 'data-situation-level-id': level.id }, []);
-    page.appendChild(renderSituationHeader(tournamentId, level, model));
-    if (!model.template.supported) {
-      page.appendChild(el('section', { class: 'card sit-unsupported' }, [
-        el('div', { class: 'card-bd' }, [el('div', { class: 'empty-state' }, [
-          el('strong', {}, ['模板暂不支持']),
-          `当前 ${model.n} 人；本阶段只提供 3–20 人双败淘汰赛模板。`,
-        ])]),
+    const route = W.state.ui.route || {};
+    const layout = W.buildSituationLayout(level);
+    const page = el('div', {
+      class: 'sx-page' + (layout.supported && layout.n >= 16 ? ' is-compact' : ''),
+      'data-situation-level-id': level.id,
+    }, []);
+    page.appendChild(renderSxBar(tournamentId, level, layout, route));
+    if (!layout.supported) {
+      page.appendChild(el('div', { class: 'sx-unsupported' }, [
+        el('div', { class: 'sx-unsupported-mark' }, ['!']),
+        el('strong', {}, [layout.message]),
+        el('div', { class: 'sx-unsupported-note' }, [
+          `当前 ${layout.n} 人。请把本级别调整到 3～20 名选手后重新打开赛情。`,
+        ]),
       ]));
-    } else {
-      if (model.current) page.appendChild(renderSituationCurrent(model));
-      page.appendChild(renderSituationBoard(model));
-      if (model.eliminated.length) page.appendChild(renderSituationEliminated(model));
-      if (model.byes.length) page.appendChild(renderSituationByes(model));
+      appRoot.appendChild(page);
+      return;
     }
+    page.appendChild(renderSxCurrent(level, layout));
+    const viewport = el('div', { class: 'sx-viewport', 'data-sx-viewport': '1' }, []);
+    const wrap = el('div', { class: 'sx-canvas-wrap' }, [renderSxCanvas(level, layout)]);
+    viewport.appendChild(wrap);
+    page.appendChild(viewport);
     appRoot.appendChild(page);
+    setupSxZoom(page, layout);
+  }
+
+  function renderSxBar(tournamentId, level, layout, route) {
+    const statusText = level.finished ? '已结束' : level.started ? '进行中' : '未开始';
+    const statusClass = level.finished ? 'is-done' : level.started ? 'is-live' : 'is-idle';
+    const from = route.from && route.from.name && route.from.name !== 'situation'
+      ? route.from
+      : { name: 'level', tournamentId, levelId: level.id };
+    const sub = layout.supported
+      ? `${layout.n} 人模板 · 胜者组 ${layout.template.wStages.length} 轮 · 败者组 ${layout.template.lStages.length} 阶段`
+        + (layout.template.templateRounds ? ` · Excel ${layout.template.templateRounds} 轮` : '')
+      : `当前 ${layout.n} 人 · 仅支持 3～20 人`;
+    return el('div', { class: 'sx-bar' }, [
+      el('div', { class: 'sx-bar-main' }, [
+        el('button', {
+          class: 'sx-back', 'data-sx-back': '1', title: '返回刚才的比赛页面',
+          onclick: () => W.setRoute(from),
+        }, ['← 返回']),
+        el('div', { class: 'sx-bar-titles' }, [
+          el('div', { class: 'sx-title', title: level.name }, [level.name]),
+          el('div', { class: 'sx-sub' }, [sub]),
+        ]),
+        el('span', { class: `sx-status ${statusClass}` }, [statusText]),
+      ]),
+      layout.supported ? el('div', { class: 'sx-tools' }, [
+        el('button', { type: 'button', class: 'sx-tool sx-zoom-btn', 'data-sx-zoom': 'out', title: '缩小' }, ['−']),
+        el('span', { class: 'sx-zoom-label', 'data-sx-zoom-label': '1' }, ['100%']),
+        el('button', { type: 'button', class: 'sx-tool sx-zoom-btn', 'data-sx-zoom': 'in', title: '放大' }, ['+']),
+        el('button', { type: 'button', class: 'sx-tool', 'data-sx-zoom': 'reset' }, ['100%']),
+        el('button', { type: 'button', class: 'sx-tool sx-fit-btn', 'data-sx-zoom': 'fit' }, ['适应屏幕']),
+      ]) : null,
+    ]);
+  }
+
+  function renderSxCurrent(level, layout) {
+    const c = layout.current;
+    if (!c) {
+      return el('div', { class: 'sx-current is-idle', 'aria-live': 'polite' }, [
+        el('div', { class: 'sx-current-meta' }, [
+          el('span', { class: 'sx-current-kicker' }, ['当前比赛']),
+          el('strong', {}, [level.finished ? '比赛已结束' : level.started ? '等待下一场对阵' : '比赛尚未开始']),
+        ]),
+        el('div', { class: 'sx-current-idle' }, [
+          level.finished ? '最终排名已生成。' : level.started ? '当前没有进行中的比赛。' : '开始比赛后，这里显示正在对阵的两名选手。',
+        ]),
+      ]);
+    }
+    const player = (p, side) => el('div', {
+      class: 'sx-current-player' + (side === 1 ? ' p1' : ' p2'),
+      'data-player-id': p.id,
+    }, [
+      el('div', { class: 'sx-current-player-top' }, [
+        el('span', { class: 'sx-current-no' }, [p.no ? `#${p.no}` : '#—']),
+        el('span', { class: 'sx-current-pos' }, [p.positionLabel || '']),
+      ]),
+      el('div', { class: 'sx-current-name', title: p.name }, [p.name]),
+      el('div', { class: 'sx-current-sub' }, [`${p.losses} 负`]),
+    ]);
+    return el('div', {
+      class: 'sx-current',
+      'data-current-source': c.source,
+      'data-table-no': c.tableNo || '',
+      'aria-live': 'polite',
+    }, [
+      el('div', { class: 'sx-current-meta' }, [
+        el('span', { class: 'sx-current-kicker' }, ['当前比赛']),
+        el('strong', {}, [c.source === 'grandFinal' ? '总决赛 · BO3' : `桌子 #${c.tableNo} · ${c.label}`]),
+        c.extraLive ? el('span', { class: 'sx-live-extra' }, [`另有 ${c.extraLive} 场进行中`]) : null,
+      ]),
+      el('div', { class: 'sx-current-duel' }, [
+        player(c.p1, 1),
+        el('div', { class: 'sx-current-vs' }, ['VS']),
+        player(c.p2, 2),
+      ]),
+      c.source === 'grandFinal'
+        ? el('div', { class: 'sx-current-score' }, [`比分 ${c.wins1} : ${c.wins2}`])
+        : null,
+    ]);
+  }
+
+  function renderSxCanvas(level, layout) {
+    const canvas = el('div', {
+      class: 'sx-canvas',
+      style: `width:${layout.width}px;height:${layout.height}px;`,
+    }, []);
+    const laneLeft = layout.colX(1) - 14;
+    const laneWidth = layout.gf.x - 12 - laneLeft;
+    canvas.appendChild(el('div', {
+      class: 'sx-lane sx-lane-w',
+      style: `left:${laneLeft}px;top:${layout.wLaneTop}px;width:${laneWidth}px;height:${layout.wLaneH}px;`,
+    }, []));
+    canvas.appendChild(el('div', {
+      class: 'sx-lane sx-lane-l',
+      style: `left:${laneLeft}px;top:${layout.lLaneTop}px;width:${laneWidth}px;height:${layout.lLaneH}px;`,
+    }, []));
+    canvas.appendChild(renderSxEdges(layout));
+    for (const stageNodes of layout.wNodes) {
+      for (const node of stageNodes) canvas.appendChild(renderSxNode(node));
+    }
+    for (const stageNodes of layout.lNodes) {
+      for (const node of stageNodes) canvas.appendChild(renderSxNode(node));
+    }
+    for (const h of layout.headers) canvas.appendChild(renderSxHeader(h));
+    canvas.appendChild(el('div', {
+      class: 'sx-side-head',
+      style: `left:${layout.entryX}px;top:14px;width:${layout.entryW}px;`,
+    }, ['选手 · 编号']));
+    canvas.appendChild(renderSxRoster(layout));
+    canvas.appendChild(renderSxRank(layout));
+    canvas.appendChild(renderSxGrandFinal(layout));
+    return canvas;
+  }
+
+  function renderSxHeader(h) {
+    return el('div', {
+      class: `sx-col-head ${h.lane === 'W' ? 'is-w' : 'is-l'}`,
+      style: `left:${h.x}px;top:${h.y}px;width:${h.w}px;`,
+    }, [
+      el('span', { class: 'sx-col-title' }, [h.label]),
+      h.byes.length ? el('span', { class: 'sx-col-byes' }, h.byes.map((b) => el('span', {
+        class: 'sx-bye-chip',
+        title: `${b.name} 轮空晋级`,
+      }, [`轮空 ${b.no ? `#${b.no}` : ''}${b.name}`]))) : null,
+    ]);
+  }
+
+  function renderSxNode(node) {
+    const empty = !node.p1 && !node.p2;
+    const cls = 'sx-match'
+      + (node.lane === 'W' ? ' is-w' : ' is-l')
+      + (node.current ? ' is-current' : '')
+      + (empty ? ' is-empty' : '')
+      + (node.status === 'done' ? ' is-done' : '');
+    return el('div', {
+      class: cls,
+      'data-lane': node.lane,
+      'data-stage': node.stage,
+      'data-match-id': node.matchId || '',
+      style: `left:${node.x}px;top:${node.y}px;width:${node.w}px;height:${node.h}px;`,
+    }, empty
+      ? [el('div', { class: 'sx-match-empty', 'aria-label': '待定', title: '待定' }, [])]
+      : [renderSxSeat(node.p1, node.seatH), renderSxSeat(node.p2, node.seatH)]);
+  }
+
+  function sxNameClass(base, name) {
+    const len = Array.from(String(name || '')).length;
+    return base
+      + (len >= 13 ? ' is-xxlong' : len >= 9 ? ' is-xlong' : len >= 6 ? ' is-long' : '');
+  }
+
+  function sxSeatClass(seat) {
+    if (!seat) return 'sx-seat is-empty';
+    return 'sx-seat'
+      + (seat.current ? ' is-current' : '')
+      + (seat.eliminated ? ' is-out' : '')
+      + (seat.result === 'win' ? ' is-win' : '')
+      + (seat.result === 'loss' ? ' is-loss' : '')
+      + (seat.result === 'live' ? ' is-live' : '');
+  }
+
+  function sxSeatMeta(seat) {
+    if (!seat) return '';
+    if (seat.current) return '当前';
+    if (seat.result === 'win') return '胜';
+    if (seat.result === 'loss') return seat.eliminated ? '淘汰' : '负';
+    if (seat.result === 'live') return '进行';
+    if (seat.result === 'waiting') return `${seat.losses}负`;
+    return `${seat.losses}负`;
+  }
+
+  function renderSxSeat(seat, height) {
+    if (!seat) {
+      return el('div', { class: 'sx-seat is-empty', style: `height:${height}px;` }, [
+        el('span', { class: 'sx-seat-name' }, ['待定']),
+      ]);
+    }
+    const title = [
+      `#${seat.no || '—'} ${seat.name}`,
+      `${seat.losses} 负`,
+      seat.placementLabel ? seat.placementLabel : '',
+      seat.eliminated ? '已淘汰' : '',
+    ].filter(Boolean).join(' · ');
+    return el('div', {
+      class: sxSeatClass(seat),
+      'data-player-id': seat.id,
+      'data-no': seat.no || '',
+      style: `height:${height}px;`,
+    }, [
+      el('span', { class: 'sx-seat-no' }, [seat.no ? `#${seat.no}` : '#—']),
+      el('span', { class: sxNameClass('sx-seat-name', seat.name), title }, [seat.name]),
+      el('span', { class: 'sx-seat-meta' }, [sxSeatMeta(seat)]),
+    ]);
+  }
+
+  function renderSxEdges(layout) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'sx-edges');
+    svg.setAttribute('width', String(layout.width));
+    svg.setAttribute('height', String(layout.height));
+    svg.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
+    const defs = document.createElementNS(NS, 'defs');
+    const marker = (id, color) => {
+      const m = document.createElementNS(NS, 'marker');
+      m.setAttribute('id', id);
+      m.setAttribute('viewBox', '0 0 8 8');
+      m.setAttribute('refX', '7');
+      m.setAttribute('refY', '4');
+      m.setAttribute('markerWidth', '7');
+      m.setAttribute('markerHeight', '7');
+      m.setAttribute('orient', 'auto');
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', 'M0,0 L8,4 L0,8 z');
+      p.setAttribute('fill', color);
+      m.appendChild(p);
+      return m;
+    };
+    defs.appendChild(marker('sx-arrow', '#475569'));
+    defs.appendChild(marker('sx-arrow-drop', '#b45309'));
+    svg.appendChild(defs);
+    for (const edge of layout.edges) {
+      const path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', edge.d);
+      path.setAttribute('class', `sx-edge is-${edge.kind}`);
+      path.setAttribute('marker-end', edge.kind === 'drop' ? 'url(#sx-arrow-drop)' : 'url(#sx-arrow)');
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+
+  function renderSxRoster(layout) {
+    const roster = el('div', {
+      class: 'sx-roster',
+      style: `left:${layout.entryX}px;top:${layout.wLaneTop}px;width:${layout.entryW}px;height:${layout.wLaneH}px;`,
+    }, []);
+    for (const entry of layout.entries) {
+      roster.appendChild(el('div', {
+        class: 'sx-entry'
+          + (entry.current ? ' is-current' : '')
+          + (entry.eliminated ? ' is-out' : ''),
+        'data-player-id': entry.id,
+        style: `top:${entry.y - layout.wLaneTop}px;height:${entry.h}px;`,
+      }, [
+        el('span', { class: 'sx-entry-no' }, [entry.no ? `#${entry.no}` : '—']),
+        el('div', { class: 'sx-entry-body' }, [
+          el('span', { class: sxNameClass('sx-entry-name', entry.name), title: entry.name }, [entry.name]),
+          el('span', { class: 'sx-entry-state' }, [entry.statusLabel]),
+        ]),
+        el('span', { class: 'sx-entry-loss' }, [`${entry.losses}负`]),
+      ]));
+    }
+    return roster;
+  }
+
+  function renderSxRank(layout) {
+    const panel = el('div', {
+      class: 'sx-rank',
+      style: `left:${layout.rank.x}px;top:${layout.rank.y}px;width:${layout.rank.w}px;height:${layout.rank.h}px;`,
+    }, [
+      el('div', { class: 'sx-rank-hd' }, [
+        el('span', { class: 'sx-rank-title' }, ['最终排名']),
+        el('span', { class: 'sx-rank-count' }, [`${layout.rank.total} 人`]),
+      ]),
+    ]);
+    const list = el('div', { class: 'sx-rank-list' }, []);
+    for (const row of layout.rank.rows) {
+      list.appendChild(el('div', {
+        class: 'sx-rank-row'
+          + (row.status === 'decided' ? ' is-decided' : ' is-pending')
+          + (row.place === 1 ? ' is-champion' : ''),
+      }, [
+        el('span', { class: 'sx-rank-place' }, [row.label]),
+        el('span', { class: 'sx-rank-name', title: row.name }, [row.name]),
+      ]));
+    }
+    panel.appendChild(list);
+    return panel;
+  }
+
+  function renderSxGrandFinal(layout) {
+    const gf = layout.gf;
+    const cls = 'sx-gf'
+      + (gf.current ? ' is-current' : '')
+      + (gf.completed ? ' is-done' : '')
+      + (gf.status === 'empty' ? ' is-empty' : '');
+    return el('div', {
+      class: cls,
+      style: `left:${gf.x}px;top:${gf.y}px;width:${gf.w}px;height:${gf.h}px;`,
+    }, [
+      el('div', { class: 'sx-gf-hd' }, [
+        el('span', { class: 'sx-gf-title' }, [gf.label]),
+        gf.status === 'empty' ? null : el('span', { class: 'sx-gf-score' }, [`${gf.wins1} : ${gf.wins2}`]),
+      ]),
+      gf.status === 'empty'
+        ? el('div', { class: 'sx-gf-empty' }, ['待产生'])
+        : el('div', { class: 'sx-gf-seats' }, [
+          renderSxSeat(gf.p1, layout.seatH),
+          renderSxSeat(gf.p2, layout.seatH),
+        ]),
+    ]);
+  }
+
+  function setupSxZoom(page, layout) {
+    const viewport = page.querySelector('[data-sx-viewport]');
+    if (!viewport) return;
+    const wrap = viewport.querySelector('.sx-canvas-wrap');
+    const canvas = viewport.querySelector('.sx-canvas');
+    const label = page.querySelector('[data-sx-zoom-label]');
+    if (!wrap || !canvas) return;
+    const clamp = (v) => Math.max(layout.minScale, Math.min(layout.maxScale, v));
+    let scale = 1;
+    const apply = () => {
+      const visualH = layout.height * scale;
+      const extra = Math.max(0, (viewport.clientHeight - visualH) / 2 - 10);
+      canvas.style.transform = `scale(${scale})`;
+      canvas.style.marginTop = `${extra}px`;
+      wrap.style.width = `${layout.width * scale}px`;
+      wrap.style.height = `${visualH + extra * 2}px`;
+      if (label) label.textContent = `${Math.round(scale * 100)}%`;
+      viewport.setAttribute('data-sx-scale', scale.toFixed(2));
+    };
+    const fit = () => {
+      const vw = Math.max(1, viewport.clientWidth - 20);
+      const vh = Math.max(1, viewport.clientHeight - 20);
+      const raw = Math.min(vw / layout.width, vh / layout.height);
+      // 20 人时允许横向滚动，但不把姓名缩到不可读。
+      scale = clamp(Math.max(layout.fitFloor, raw));
+      apply();
+    };
+    for (const btn of page.querySelectorAll('[data-sx-zoom]')) {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-sx-zoom');
+        if (action === 'in') scale = clamp(scale + 0.1);
+        else if (action === 'out') scale = clamp(scale - 0.1);
+        else if (action === 'reset') scale = 1;
+        else if (action === 'fit') { fit(); return; }
+        apply();
+      });
+    }
+    fit();
+    // 等浏览器完成首次布局后再校正一次，避免首屏宽度为 0。
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fit);
   }
 
   function renderSituationHeader(tournamentId, level, model) {
@@ -767,7 +1135,7 @@
             ? el('button', { class: 'btn primary', 'data-action': 'start-level', onclick: () => { processEvents(W.startLevel(level), level); W.saveState(); W.render(); } }, ['开始比赛'])
             : null,
           el('button', { class: 'btn', onclick: () => openPlayerListModal(level) }, ['选手列表']),
-          el('button', { class: 'btn', 'data-action': 'situation', onclick: () => W.setRoute({ name: 'situation', tournamentId, levelId }) }, ['赛情']),
+          el('button', { class: 'btn', 'data-action': 'situation', onclick: () => openSituation(tournamentId, level.id) }, ['赛情']),
           el('button', { class: 'btn', onclick: () => openRankingModal(level) }, ['实时名次']),
           el('button', { class: 'btn', onclick: () => { if (!level.started) { W.toast('尚未开始'); return; } const msg = W.undoLast(level, 'global'); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['全局撤回']),
           el('button', { class: 'btn', onclick: () => openHistoryModal(level) }, ['比赛历史']),

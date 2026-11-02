@@ -194,7 +194,7 @@
       const p1 = one(m.p1), p2 = one(m.p2);
       if (!p1 || !p2) return null;
       return {
-        source: 'table', tableNo: t.tableNo, bracket: m.bracket,
+        source: 'table', matchId: m.id, tableNo: t.tableNo, bracket: m.bracket,
         round: m.bracket === 'W' ? (m.round || 1) : null,
         stage: m.bracket === 'L' ? (m.stage || 1) : null,
         label, extraLive: tables.length - 1, p1, p2,
@@ -209,7 +209,7 @@
       const p1 = one(gf.p1), p2 = one(gf.p2);
       if (!p1 || !p2) return null;
       return {
-        source: 'grandFinal', tableNo: null, bracket: 'GF',
+        source: 'grandFinal', matchId: null, tableNo: null, bracket: 'GF',
         round: null, stage: null, label: '总决赛 · BO3',
         wins1: gf.wins1 || 0, wins2: gf.wins2 || 0, extraLive: 0, p1, p2,
       };
@@ -419,6 +419,433 @@
         label: gf.completed ? '总决赛已结束' : '总决赛 · BO3 三局两胜',
       } : null,
       rankings,
+    };
+  };
+
+  /* ==================== 横向位置图布局（只读，不参与配对） ==================== */
+  const SX = Object.freeze({
+    pad: 24,
+    entryW: 164,
+    entryGap: 34,
+    matchW: 176,
+    colGap: 36,
+    laneGap: 96,
+    top: 78,
+    rankW: 226,
+    minScale: 0.6,
+    maxScale: 1.8,
+    // 默认适应屏幕，但不为了塞进屏幕把姓名缩到不可读。
+    fitFloor: 0.72,
+  });
+
+  function sxColX(col, entryX) {
+    return entryX + SX.entryGap + (col - 1) * (SX.matchW + SX.colGap);
+  }
+
+  function sxMatchStage(m) {
+    if (!m) return null;
+    if (m.bracket === 'W') return Number.isFinite(m.round) ? Math.max(1, Math.floor(m.round)) : null;
+    if (m.bracket === 'L') return Number.isFinite(m.stage) ? Math.max(1, Math.floor(m.stage)) : null;
+    return null;
+  }
+
+  function sxCollectMatches(level) {
+    const map = new Map();
+    const add = (m, status, tableNo) => {
+      if (!m || !m.id || map.has(m.id)) return;
+      const stage = sxMatchStage(m);
+      if (!stage) return;
+      map.set(m.id, {
+        id: m.id,
+        bracket: m.bracket,
+        stage,
+        p1: m.p1,
+        p2: m.p2,
+        status,
+        tableNo: tableNo != null ? tableNo : (m.tableNo != null ? m.tableNo : null),
+        winnerId: m.winnerId || null,
+        loserId: m.loserId || null,
+      });
+    };
+    for (const h of level.history || []) add(h, 'done', h.tableNo);
+    for (const t of level.tables || []) if (t && t.match) add(t.match, 'live', t.tableNo);
+    for (const m of level.pendingMatches || []) add(m, 'waiting', m.tableNo);
+    return Array.from(map.values());
+  }
+
+  function sxResultOf(match, playerId) {
+    if (!match) return null;
+    if (match.status === 'done') return match.winnerId === playerId ? 'win' : (match.loserId === playerId ? 'loss' : null);
+    if (match.status === 'live') return 'live';
+    return 'waiting';
+  }
+
+  function sxEdgePath(x1, y1, x2, y2) {
+    const dy = Math.abs(y2 - y1);
+    if (dy < 1) return `M${x1},${y1} H${x2}`;
+    const midX = x1 + Math.max(14, Math.min(70, (x2 - x1) * 0.5));
+    return `M${x1},${y1} H${midX} V${y2} H${x2}`;
+  }
+
+  /*
+   * 位置图模型：
+   * - 每个引擎阶段一列，胜者组在上、败者组在下；
+   * - 阶段内的位置按实际对阵顺序排列，空位显示「待定」；
+   * - 连线只连接真实发生过的晋级/落败流转；没有发生的对阵绝不补线；
+   * - 模板轮次只用于顶部说明，不反向生成对阵。
+   */
+  W.buildSituationLayout = function buildSituationLayout(level) {
+    const safeLevel = level || { players: {} };
+    const tpl = W.situationTemplate(Object.keys(safeLevel.players || {}).length);
+    if (!tpl.supported) {
+      return {
+        supported: false,
+        n: tpl.n,
+        template: tpl,
+        message: '当前赛情功能仅支持3～20名选手',
+      };
+    }
+
+    const n = tpl.n;
+    const numbers = numberMap(safeLevel);
+    const entriesIds = drawOrderOf(safeLevel);
+    const current = currentMatch(safeLevel, numbers);
+    const currentIds = new Set(current ? [current.p1.id, current.p2.id] : []);
+    const rankings = W.getRankingView(safeLevel) || [];
+    const rankById = new Map(rankings.map((r) => [r.playerId, r]));
+    const gf = safeLevel.grandFinal;
+    const gfIds = new Set(gf ? [gf.p1, gf.p2] : []);
+
+    // 小人数时放大行距和卡片，让位置图真正铺满屏幕，而不是缩在左上角。
+    const rowSteps = { 3: 190, 4: 165, 5: 190, 6: 170, 7: 140, 8: 120, 9: 130, 10: 118, 11: 100, 12: 88, 13: 88, 14: 80, 15: 74 };
+    const rowStep = n >= 18 ? 62 : n >= 16 ? 64 : (rowSteps[n] || 78);
+    const matchH = Math.min(104, Math.max(54, rowStep - 12));
+    const seatH = matchH / 2;
+    const wRows = Math.max(1, tpl.wStages[0] ? tpl.wStages[0].matches : 0);
+    const lRows = Math.max(1, ...tpl.lStages.map((s) => s.matches));
+    const wLaneTop = SX.top;
+    const wLaneH = wRows * rowStep;
+    const lLaneTop = wLaneTop + wLaneH + SX.laneGap;
+    const lLaneH = lRows * rowStep;
+    const laneBottom = lLaneTop + lLaneH;
+    const entryX = SX.pad;
+    const entryRight = entryX + SX.entryW;
+    const firstColX = sxColX(1, entryRight);
+    const wCount = tpl.wStages.length;
+    const lCount = tpl.lStages.length;
+    const gfCol = Math.max(wCount, lCount + 1) + 1;
+    const gfX = sxColX(gfCol, entryRight);
+    const gfW = SX.matchW + 22;
+    const rankX = gfX + gfW + 34;
+    const width = rankX + SX.rankW + SX.pad;
+    const height = laneBottom + SX.pad + 8;
+
+    const matches = sxCollectMatches(safeLevel);
+    const byStage = new Map();
+    for (const m of matches) {
+      const key = `${m.bracket}:${m.stage}`;
+      if (!byStage.has(key)) byStage.set(key, []);
+      byStage.get(key).push(m);
+    }
+    const sortKey = (m) => {
+      const a = numbers.get(m.p1) || 999;
+      const b = numbers.get(m.p2) || 999;
+      return Math.min(a, b) * 1000 + Math.max(a, b);
+    };
+    for (const list of byStage.values()) list.sort((a, b) => sortKey(a) - sortKey(b));
+
+    function makeSeat(playerId, result, matchId, lane, stage) {
+      if (!playerId) return null;
+      const p = safeLevel.players ? safeLevel.players[playerId] : null;
+      if (!p) return null;
+      const rank = rankById.get(playerId);
+      const isCurrent = !!current && (
+        (current.source === 'grandFinal' && currentIds.has(playerId)) ||
+        (current.matchId && matchId === current.matchId && currentIds.has(playerId))
+      );
+      const placementLabel = rank && rank.status === 'decided'
+        ? rank.label
+        : (Number.isInteger(p.placement) ? W.rankingLabel(p.placement) : '');
+      return {
+        id: playerId,
+        no: numbers.get(playerId) || null,
+        name: p.name,
+        losses: Number.isFinite(p.losses) ? p.losses : 0,
+        bracket: lane,
+        stage,
+        result,
+        current: isCurrent,
+        eliminated: !!(p.eliminatedAt || p.losses >= 2),
+        placement: Number.isInteger(p.placement) ? p.placement : null,
+        placementLabel: placementLabel || '',
+        x: 0, y: 0, w: 0, h: 0, cy: 0,
+      };
+    }
+
+    function buildLane(lane, defs, laneTop, laneH) {
+      return defs.map((st) => {
+        const list = byStage.get(`${lane}:${st.stage}`) || [];
+        const count = Math.max(st.matches, list.length, 1);
+        const col = lane === 'W' ? st.stage : st.stage + 1;
+        const x = sxColX(col, entryRight);
+        const nodes = [];
+        for (let i = 0; i < count; i += 1) {
+          const m = list[i] || null;
+          const cy = laneTop + laneH * ((i + 0.5) / count);
+          const node = {
+            kind: 'match',
+            lane,
+            stage: st.stage,
+            col,
+            x,
+            y: cy - matchH / 2,
+            w: SX.matchW,
+            h: matchH,
+            seatH,
+            matchId: m ? m.id : null,
+            status: m ? m.status : 'empty',
+            tableNo: m ? m.tableNo : null,
+            current: !!(current && current.matchId && m && current.matchId === m.id),
+            p1: null,
+            p2: null,
+          };
+          const one = (slot, id) => {
+            const seat = makeSeat(id, sxResultOf(m, id), m ? m.id : null, lane, st.stage);
+            if (!seat) return null;
+            seat.x = node.x;
+            seat.y = node.y + slot * seatH;
+            seat.w = node.w;
+            seat.h = seatH;
+            seat.cy = seat.y + seatH / 2;
+            return seat;
+          };
+          node.p1 = one(0, m ? m.p1 : null);
+          node.p2 = one(1, m ? m.p2 : null);
+          nodes.push(node);
+        }
+        return nodes;
+      });
+    }
+
+    const wNodes = buildLane('W', tpl.wStages, wLaneTop, wLaneH);
+    const lNodes = buildLane('L', tpl.lStages, lLaneTop, lLaneH);
+    const allSeats = [];
+    for (const stageNodes of wNodes.concat(lNodes)) {
+      for (const node of stageNodes) {
+        if (node.p1) allSeats.push(node.p1);
+        if (node.p2) allSeats.push(node.p2);
+      }
+    }
+
+    const wFinal = wNodes.length ? wNodes[wNodes.length - 1][0] : null;
+    const lFinal = lNodes.length ? lNodes[lNodes.length - 1][0] : null;
+    const wFinalCy = wFinal ? wFinal.y + wFinal.h / 2 : null;
+    const lFinalCy = lFinal ? lFinal.y + lFinal.h / 2 : null;
+    const gfH = matchH + 24;
+    const gfCy = wFinalCy != null && lFinalCy != null
+      ? (wFinalCy + lFinalCy) / 2
+      : (wLaneTop + laneBottom) / 2;
+    const gfY = Math.max(wLaneTop, Math.min(laneBottom - gfH, gfCy - gfH / 2));
+    const gfSeats = [];
+    if (gf) {
+      const one = (slot, id) => {
+        if (!id) return null;
+        const p = safeLevel.players ? safeLevel.players[id] : null;
+        if (!p) return null;
+        const result = gf.completed ? (gf.winnerId === id ? 'win' : 'loss') : 'live';
+        const seat = makeSeat(id, result, null, 'GF', 1);
+        if (!seat) return null;
+        seat.x = gfX;
+        seat.y = gfY + 24 + slot * seatH;
+        seat.w = gfW;
+        seat.h = seatH;
+        seat.cy = seat.y + seatH / 2;
+        return seat;
+      };
+      gfSeats.push(one(0, gf.p1), one(1, gf.p2));
+    }
+    for (const seat of gfSeats) if (seat) allSeats.push(seat);
+
+    const gfNode = {
+      kind: 'grandFinal',
+      x: gfX,
+      y: gfY,
+      w: gfW,
+      h: gfH,
+      seatH,
+      status: gf ? (gf.completed ? 'done' : 'live') : 'empty',
+      current: !!(current && current.source === 'grandFinal'),
+      completed: !!(gf && gf.completed),
+      label: gf ? '总决赛 · BO3' : '总决赛',
+      wins1: gf ? (gf.wins1 || 0) : 0,
+      wins2: gf ? (gf.wins2 || 0) : 0,
+      p1: gfSeats[0] || null,
+      p2: gfSeats[1] || null,
+    };
+
+    // 划线只基于真实出现过的位置：胜者继续 → 实线；落入败者组 → 虚线。
+    const byPlayer = new Map();
+    for (const seat of allSeats) {
+      if (!byPlayer.has(seat.id)) byPlayer.set(seat.id, []);
+      byPlayer.get(seat.id).push(seat);
+    }
+    const orderOf = (seat) => {
+      if (seat.bracket === 'GF') return 1000;
+      if (seat.bracket === 'W') return seat.stage * 2;
+      return 500 + seat.stage * 2;
+    };
+    const edges = [];
+    for (const list of byPlayer.values()) {
+      list.sort((a, b) => orderOf(a) - orderOf(b));
+      for (let i = 0; i < list.length - 1; i += 1) {
+        const from = list[i];
+        const to = list[i + 1];
+        if (from.result === 'win') {
+          edges.push({
+            kind: 'advance',
+            x1: from.x + from.w,
+            y1: from.cy,
+            x2: to.x,
+            y2: to.cy,
+            d: sxEdgePath(from.x + from.w, from.cy, to.x, to.cy),
+          });
+        } else if (from.result === 'loss' && to.bracket === 'L') {
+          edges.push({
+            kind: 'drop',
+            x1: from.x + from.w,
+            y1: from.cy,
+            x2: to.x,
+            y2: to.cy,
+            d: sxEdgePath(from.x + from.w, from.cy, to.x, to.cy),
+          });
+        }
+      }
+    }
+
+    const headers = [];
+    const byesFor = (lane, stage) => (safeLevel.byes || [])
+      .filter((b) => b && b.bracket === lane && (lane === 'W' ? b.round === stage : b.stage === stage))
+      .map((b) => {
+        const p = safeLevel.players ? safeLevel.players[b.playerId] : null;
+        return {
+          playerId: b.playerId,
+          no: numbers.get(b.playerId) || null,
+          name: p ? p.name : '未知选手',
+        };
+      });
+    for (const st of tpl.wStages) {
+      headers.push({
+        lane: 'W', stage: st.stage,
+        x: firstColX + (st.stage - 1) * (SX.matchW + SX.colGap),
+        y: wLaneTop - 38,
+        w: SX.matchW,
+        label: `胜者组第${st.stage}轮`,
+        byes: byesFor('W', st.stage),
+      });
+    }
+    for (const st of tpl.lStages) {
+      headers.push({
+        lane: 'L', stage: st.stage,
+        x: firstColX + st.stage * (SX.matchW + SX.colGap),
+        y: lLaneTop - 38,
+        w: SX.matchW,
+        label: `败者组第${st.stage}阶段`,
+        byes: byesFor('L', st.stage),
+      });
+    }
+
+    const lastWCol = wCount;
+    const lastLCol = lCount + 1;
+    edges.push({
+      kind: 'flow',
+      x1: firstColX,
+      y1: wLaneTop + wLaneH + 20,
+      x2: sxColX(lastWCol, entryRight) + SX.matchW,
+      y2: wLaneTop + wLaneH + 20,
+      d: sxEdgePath(firstColX, wLaneTop + wLaneH + 20, sxColX(lastWCol, entryRight) + SX.matchW, wLaneTop + wLaneH + 20),
+    });
+    edges.push({
+      kind: 'flow',
+      x1: firstColX,
+      y1: laneBottom + 14,
+      x2: sxColX(lastLCol, entryRight) + SX.matchW,
+      y2: laneBottom + 14,
+      d: sxEdgePath(firstColX, laneBottom + 14, sxColX(lastLCol, entryRight) + SX.matchW, laneBottom + 14),
+    });
+
+    const entryRowH = Math.max(26, Math.min(38, (wLaneH - 6) / Math.max(1, n)));
+    const entryStart = wLaneTop + (wLaneH - entryRowH * n) / 2;
+    const entries = entriesIds.map((id, i) => {
+      const p = safeLevel.players[id];
+      const rank = rankById.get(id);
+      let statusLabel = '赛前';
+      if (gfIds.has(id)) statusLabel = gf && gf.completed ? '总决赛结束' : '总决赛';
+      else if (p.eliminatedAt || p.losses >= 2) statusLabel = rank && rank.status === 'decided' ? `${rank.label} · 淘汰` : '已淘汰';
+      else if (currentIds.has(id)) statusLabel = '当前比赛';
+      else if (safeLevel.started) statusLabel = p.bracket === 'L' ? '败者组' : '胜者组';
+      return {
+        id,
+        no: safeLevel.started ? (numbers.get(id) || null) : null,
+        name: p.name,
+        losses: Number.isFinite(p.losses) ? p.losses : 0,
+        statusLabel,
+        current: currentIds.has(id),
+        eliminated: !!(p.eliminatedAt || p.losses >= 2),
+        x: entryX,
+        y: entryStart + i * entryRowH,
+        w: SX.entryW,
+        h: entryRowH - 2,
+      };
+    });
+
+    const rankRows = rankings.map((r) => ({
+      place: r.place,
+      label: r.label,
+      name: r.status === 'decided' ? r.name : '未决出',
+      status: r.status,
+      losses: r.losses,
+    }));
+    // 排名行不再拉满整个池高，避免少数选手时每行过高、20 人时又过于松散。
+    const rankRowH = n >= 16 ? 33 : 54;
+    const rankH = Math.min(laneBottom - wLaneTop, 46 + n * rankRowH);
+
+    return {
+      supported: true,
+      n,
+      template: tpl,
+      width,
+      height,
+      top: wLaneTop,
+      wLaneTop,
+      wLaneH,
+      lLaneTop,
+      lLaneH,
+      laneBottom,
+      entryX,
+      entryW: SX.entryW,
+      matchW: SX.matchW,
+      seatH,
+      colX: (c) => sxColX(c, entryRight),
+      wNodes,
+      lNodes,
+      gf: gfNode,
+      headers,
+      entries,
+      edges,
+      rank: {
+        x: rankX,
+        y: wLaneTop,
+        w: SX.rankW,
+        h: rankH,
+        rows: rankRows,
+        total: n,
+      },
+      current,
+      currentIds: Array.from(currentIds),
+      rankings,
+      minScale: SX.minScale,
+      maxScale: SX.maxScale,
+      fitFloor: SX.fitFloor,
     };
   };
 
