@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const W = window.WACAA || {};
-  const { uid, now, deepClone, shuffle } = W;
+  const { uid, now, deepClone, shuffle, hasOwn } = W;
 
   /* ---- 参与者占用追踪 ---- */
   W.participantsInUse = function participantsInUse(level) {
@@ -45,7 +45,7 @@
    * - 因此“下一阶段”= 存活败者组选手中最小的 lStage + 1。
    */
   function playerLoserStage(level, id) {
-    const p = level.players && level.players[id];
+    const p = hasOwn(level.players, id) ? level.players[id] : null;
     if (!p) return 0;
     if (typeof p.lStage === 'number' && Number.isFinite(p.lStage)) {
       return Math.max(0, Math.floor(p.lStage));
@@ -97,7 +97,7 @@
   }
 
   function isPlayerAlive(level, id) {
-    const p = level.players && level.players[id];
+    const p = hasOwn(level.players, id) ? level.players[id] : null;
     return !!p && p.losses < 2 && !p.eliminatedAt;
   }
 
@@ -160,7 +160,7 @@
 
     const players = level.players || {};
     const isAlive = (id) => {
-      const p = players[id];
+      const p = hasOwn(players, id) ? players[id] : null;
       return !!p && p.losses < 2 && !p.eliminatedAt;
     };
     const inUse = new Set();
@@ -226,7 +226,12 @@
     cleanupPendingMatches(level);
 
     W.adjustTablesToAutoCount(level, events);
-    if (level.grandFinal && !level.grandFinal.completed) return events;
+    if (level.grandFinal && !level.grandFinal.completed) {
+      // 总决赛未完成时不再生成普通对阵；但若决赛选手已经退赛/失效，
+      // 必须在这里收尾，不能留下可继续操作的未完成总决赛。
+      W.finalizeIfDone(level);
+      return events;
+    }
     if (W.alivePlayers(level).length <= 1) { W.finalizeIfDone(level); return events; }
     if (trySetupGrandFinal(level, events)) return events;
 
@@ -308,7 +313,7 @@
     if (pool.length % 2 === 1) {
       const byeIdx = Math.floor(Math.random() * pool.length);
       const byeId = pool.splice(byeIdx, 1)[0];
-      byeName = level.players[byeId]?.name || null;
+      byeName = hasOwn(level.players, byeId) ? (level.players[byeId].name || null) : null;
       // 只记录轮空事实；不生成比赛、不增加负场，也不改变配对结果。
       if (!Array.isArray(level.byes)) level.byes = [];
       level.byes.push({
@@ -353,7 +358,7 @@
     if (pool.length % 2 === 1) {
       const byeIdx = Math.floor(Math.random() * pool.length);
       const byeId = pool.splice(byeIdx, 1)[0];
-      const p = level.players[byeId];
+      const p = hasOwn(level.players, byeId) ? level.players[byeId] : null;
       if (p) {
         p.lStage = stage;
         byeName = p.name;
@@ -478,7 +483,8 @@
     if (!table?.match) return events;
     const match = table.match;
     const loserId = match.p1 === winnerId ? match.p2 : match.p1;
-    const w = level.players[winnerId], l = level.players[loserId];
+    const w = hasOwn(level.players, winnerId) ? level.players[winnerId] : null;
+    const l = hasOwn(level.players, loserId) ? level.players[loserId] : null;
     if (!w || !l) return events;
     W.pushUndoSnapshot(level, `table:${tableNo}`);
     W.pushUndoSnapshot(level, 'global');
@@ -519,7 +525,7 @@
   }
 
   W.eliminate = function eliminate(level, playerId) {
-    const p = level.players[playerId];
+    const p = hasOwn(level.players, playerId) ? level.players[playerId] : null;
     if (!p || p.eliminatedAt) return;
     // 由 state 统一打上淘汰序号：同一毫秒内连续淘汰时名次仍然确定
     W.markEliminated(level, p);
@@ -527,9 +533,23 @@
 
   // M2: 也处理 0 存活的情况
   W.finalizeIfDone = function finalizeIfDone(level) {
-    if (level.grandFinal?.completed) { level.finished = true; return; }
-    const alive = W.alivePlayers(level).length;
-    if (alive <= 1 && level.started) { level.finished = true; }
+    if (!level.started) return;
+    const gf = level.grandFinal;
+    if (gf && !gf.completed) {
+      const p1Alive = isPlayerAlive(level, gf.p1);
+      const p2Alive = isPlayerAlive(level, gf.p2);
+      if (!p1Alive && !p2Alive) {
+        // 双方都无法继续：不猜测冠军，保留为需要人工处理的未决状态。
+        gf.needsManual = true;
+        level.finished = false;
+        return;
+      }
+      if (p1Alive !== p2Alive) {
+        W.resolveGrandFinalWithdrawal(level, p1Alive ? gf.p2 : gf.p1);
+        return;
+      }
+    }
+    if (gf?.completed || W.alivePlayers(level).length <= 1) level.finished = true;
   };
 
   function maybeStageEvent(level) {
@@ -543,12 +563,42 @@
   /* ---- 总决赛 ---- */
   W.setupGrandFinal = function setupGrandFinal(level, wId, lId) {
     level.banners.gfShown = true;
-    level.grandFinal = { p1: wId, p2: lId, wins1: 0, wins2: 0, completed: false, winnerId: null, runnerUpId: null };
+    level.grandFinal = {
+      p1: wId, p2: lId, wins1: 0, wins2: 0,
+      completed: false, winnerId: null, runnerUpId: null,
+      endReason: null, needsManual: false,
+    };
+  };
+
+  /*
+   * 总决赛期间退赛：另一名决赛选手直接夺冠，退赛者记为亚军。
+   * 用 endReason 明确记录“因退赛结束”，不伪造 BO3 局分。
+   * 若双方都已无法继续，保留 needsManual，交由人工处理。
+   */
+  W.resolveGrandFinalWithdrawal = function resolveGrandFinalWithdrawal(level, playerId) {
+    const gf = level.grandFinal;
+    if (!gf || gf.completed) return null;
+    if (playerId !== gf.p1 && playerId !== gf.p2) return null;
+    const p1Alive = isPlayerAlive(level, gf.p1);
+    const p2Alive = isPlayerAlive(level, gf.p2);
+    if (p1Alive && p2Alive) return null;
+    if (!p1Alive && !p2Alive) {
+      gf.needsManual = true;
+      level.finished = false;
+      return { type: 'gfUnresolved' };
+    }
+    const winnerId = p1Alive ? gf.p1 : gf.p2;
+    const runnerUpId = p1Alive ? gf.p2 : gf.p1;
+    finishGrandFinal(level, winnerId, runnerUpId, 'withdrawal');
+    return { type: 'gfComplete', winnerId, runnerUpId, reason: 'withdrawal' };
   };
 
   W.recordGrandFinalWin = function recordGrandFinalWin(level, which) {
     const gf = level.grandFinal;
-    if (!gf || gf.completed) return null;
+    if (!gf || gf.completed || level.finished) return null;
+    if (which !== 1 && which !== 2) return null;
+    // 已经退赛/淘汰的决赛选手不能再录入结果。
+    if (!isPlayerAlive(level, gf.p1) || !isPlayerAlive(level, gf.p2)) return null;
     W.pushUndoSnapshot(level, 'global');
     if (which === 1) gf.wins1 += 1; else gf.wins2 += 1;
     if (gf.wins1 >= 2) { finishGrandFinal(level, gf.p1, gf.p2); return { type: 'gfComplete', winnerId: gf.p1, runnerUpId: gf.p2 }; }
@@ -559,7 +609,8 @@
   // N3: 总决赛撤回上一局
   W.undoGrandFinalPoint = function undoGrandFinalPoint(level) {
     const gf = level.grandFinal;
-    if (!gf || gf.completed) return null;
+    if (!gf || gf.completed || level.finished) return null;
+    if (!isPlayerAlive(level, gf.p1) || !isPlayerAlive(level, gf.p2)) return null;
     // 找到最近一次 grandFinal 相关的快照
     for (let i = level.undoStack.length - 1; i >= 0; i--) {
       const u = level.undoStack[i];
@@ -580,9 +631,13 @@
     return null;
   };
 
-  function finishGrandFinal(level, winnerId, runnerUpId) {
-    level.grandFinal.completed = true; level.grandFinal.winnerId = winnerId; level.grandFinal.runnerUpId = runnerUpId;
-    const r = level.players[runnerUpId];
+  function finishGrandFinal(level, winnerId, runnerUpId, reason) {
+    level.grandFinal.completed = true;
+    level.grandFinal.winnerId = winnerId;
+    level.grandFinal.runnerUpId = runnerUpId;
+    level.grandFinal.endReason = reason === 'withdrawal' ? 'withdrawal' : 'normal';
+    level.grandFinal.needsManual = false;
+    const r = hasOwn(level.players, runnerUpId) ? level.players[runnerUpId] : null;
     if (r) { r.losses = 2; W.eliminate(level, r.id); }
     level.finished = true;
   }
@@ -617,7 +672,7 @@
     const seeds = [];
     const seedSeen = new Set();
     for (const id of Array.isArray(level.playerOrder) ? level.playerOrder : []) {
-      if (level.players[id] && !seedSeen.has(id)) { seedSeen.add(id); seeds.push(id); }
+      if (hasOwn(level.players, id) && !seedSeen.has(id)) { seedSeen.add(id); seeds.push(id); }
     }
     for (const id of Object.keys(level.players)) {
       if (!seedSeen.has(id)) { seedSeen.add(id); seeds.push(id); }
@@ -628,7 +683,7 @@
       // 轮空位固定在抽签后的最后一个编号，保证 1/2、3/4… 两两相邻；
       // 谁轮空仍由本次随机抽签决定，不按报名顺序内定。
       const byeId = firstRound.pop();
-      const p = level.players[byeId];
+      const p = hasOwn(level.players, byeId) ? level.players[byeId] : null;
       if (p) {
         events.push({ type: 'bye', name: p.name });
         level.byes.push({ playerId: byeId, bracket: 'W', round: 1, stage: null, at: now() });

@@ -378,7 +378,9 @@
           el('button', { class: 'btn small', 'data-action': 'situation', onclick: () => openSituation(tournamentId, levelId) }, ['赛情']),
           el('button', { class: 'btn small', onclick: () => openRankingModal(level) }, ['名次']),
           el('button', { class: 'btn small', onclick: () => openHistoryModal(level) }, ['历史']),
-          el('button', { class: 'btn small', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛']),
+          (!level.grandFinal || canRecordGrandFinal(level))
+            ? el('button', { class: 'btn small', onclick: () => { if (canRecordGrandFinal(level)) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['决赛'])
+            : null,
           level.started ? el('button', { class: 'btn small danger', 'data-action': 'reset-level', onclick: () => resetLevelFlow(level) }, ['退回赛前设置']) : null,
           el('button', { class: 'btn small primary', onclick: () => W.setRoute({ name: 'level', tournamentId, levelId }) }, ['进入']),
         ]),
@@ -1113,7 +1115,9 @@
           el('button', { class: 'btn', onclick: () => openRankingModal(level) }, ['实时名次']),
           el('button', { class: 'btn', onclick: () => { if (!level.started) { W.toast('尚未开始'); return; } const msg = W.undoLast(level, 'global'); if (msg) { W.toast(msg); W.saveState(); W.render(); } else W.toast('没有可撤销的记录'); } }, ['全局撤回']),
           el('button', { class: 'btn', onclick: () => openHistoryModal(level) }, ['比赛历史']),
-          el('button', { class: 'btn', onclick: () => { if (level.grandFinal && !level.grandFinal.completed) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['总决赛面板']),
+          (!level.grandFinal || canRecordGrandFinal(level))
+            ? el('button', { class: 'btn', onclick: () => { if (canRecordGrandFinal(level)) showGrandFinalModal(level); else W.toast('未进入总决赛'); } }, ['总决赛面板'])
+            : null,
         ]),
         el('div', { class: 'level-toolbar-danger-zone', 'aria-label': '危险操作' }, [
           level.started ? el('button', { class: 'btn toolbar-danger', 'data-action': 'reset-level', onclick: () => resetLevelFlow(level) }, ['退回赛前设置']) : null,
@@ -1547,15 +1551,26 @@
     openModal({ title, bodyEl: body, footerEl: el('div', {}, [el('button', { class: 'btn primary', onclick: closeModal }, ['我知道了'])]) });
   }
 
+  /* 总决赛是否还能录入局分：未结束，且双方都仍在比赛中。 */
+  function canRecordGrandFinal(level) {
+    const gf = level.grandFinal;
+    if (!gf || gf.completed || level.finished) return false;
+    const p1 = W.hasOwn(level.players, gf.p1) ? level.players[gf.p1] : null;
+    const p2 = W.hasOwn(level.players, gf.p2) ? level.players[gf.p2] : null;
+    return !!p1 && !!p2 && p1.losses < 2 && !p1.eliminatedAt
+      && p2.losses < 2 && !p2.eliminatedAt;
+  }
+
   // N3: 总决赛面板加撤回按钮
   function showGrandFinalModal(level) {
     const gf = level.grandFinal; if (!gf) return;
+    if (!canRecordGrandFinal(level)) { W.toast('总决赛已结束或无法继续'); return; }
     const p1 = level.players[gf.p1], p2 = level.players[gf.p2];
     const body = document.createElement('div');
     body.innerHTML = `<div class="gf-head"><div class="stack"><div class="title">总决赛（BO3 三局两胜）</div><div class="subtitle">胜者组冠军 vs 败者组冠军</div></div><span class="badge warn">进行中</span></div><div class="grid cols-2"><div class="player-box"><div class="name">${escapeHtml(p1?.name || '')}</div><div class="py">${escapeHtml(p1?.pinyin || '')}</div><div class="hr"></div><div class="row between"><div class="muted">胜局</div><div class="gf-score">${gf.wins1}</div></div><div style="margin-top:12px;"><button class="btn ok block" id="gfP1Win">本局胜利</button></div></div><div class="player-box"><div class="name">${escapeHtml(p2?.name || '')}</div><div class="py">${escapeHtml(p2?.pinyin || '')}</div><div class="hr"></div><div class="row between"><div class="muted">胜局</div><div class="gf-score">${gf.wins2}</div></div><div style="margin-top:12px;"><button class="btn ok block" id="gfP2Win">本局胜利</button></div></div></div><div class="hint" style="margin-top:12px;">先赢 2 局者夺冠。<button class="btn small danger" id="gfUndo" style="margin-left:10px;">撤销上一局</button></div>`;
     openModal({ title: '总决赛开始', bodyEl: body, footerEl: el('div', {}, [el('button', { class: 'btn', onclick: closeModal }, ['稍后再记'])]) });
-    body.querySelector('#gfP1Win').onclick = () => { const evt = W.recordGrandFinalWin(level, 1); W.saveState(); closeModal(); W.render(); if (evt?.type === 'gfComplete') W.toast(`冠军 ${level.players[evt.winnerId]?.name || ''}`); else if (!level.grandFinal?.completed) showGrandFinalModal(level); };
-    body.querySelector('#gfP2Win').onclick = () => { const evt = W.recordGrandFinalWin(level, 2); W.saveState(); closeModal(); W.render(); if (evt?.type === 'gfComplete') W.toast(`冠军 ${level.players[evt.winnerId]?.name || ''}`); else if (!level.grandFinal?.completed) showGrandFinalModal(level); };
+    body.querySelector('#gfP1Win').onclick = () => { const evt = W.recordGrandFinalWin(level, 1); W.saveState(); closeModal(); W.render(); if (evt?.type === 'gfComplete') W.toast(`冠军 ${level.players[evt.winnerId]?.name || ''}`); else if (canRecordGrandFinal(level)) showGrandFinalModal(level); };
+    body.querySelector('#gfP2Win').onclick = () => { const evt = W.recordGrandFinalWin(level, 2); W.saveState(); closeModal(); W.render(); if (evt?.type === 'gfComplete') W.toast(`冠军 ${level.players[evt.winnerId]?.name || ''}`); else if (canRecordGrandFinal(level)) showGrandFinalModal(level); };
     // N3: 撤销上一局
     body.querySelector('#gfUndo').onclick = () => {
       const msg = W.undoGrandFinalPoint(level);

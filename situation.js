@@ -77,7 +77,7 @@
     const out = [];
     const seen = new Set();
     const add = (id) => {
-      if (players[id] && !seen.has(id)) { seen.add(id); out.push(id); }
+      if (W.hasOwn(players, id) && !seen.has(id)) { seen.add(id); out.push(id); }
     };
     for (const id of Array.isArray(level.drawOrder) ? level.drawOrder : []) add(id);
     for (const id of Array.isArray(level.playerOrder) ? level.playerOrder : []) add(id);
@@ -109,7 +109,7 @@
   }
 
   function playerPosition(level, tpl, playerId, live) {
-    const p = level.players?.[playerId];
+    const p = W.hasOwn(level.players, playerId) ? level.players[playerId] : null;
     if (!p) return null;
     if (p.bracket === 'L') {
       const match = live.get(playerId);
@@ -188,7 +188,7 @@
         ? `败者组第${m.stage || 1}阶段`
         : `胜者组第${m.round || 1}轮`;
       const one = (id) => {
-        const p = level.players?.[id];
+        const p = W.hasOwn(level.players, id) ? level.players[id] : null;
         return p ? { id, name: p.name, no: numbers.get(id) || null, losses: p.losses, positionLabel: label } : null;
       };
       const p1 = one(m.p1), p2 = one(m.p2);
@@ -203,8 +203,10 @@
     const gf = level.grandFinal;
     if (gf && !gf.completed) {
       const one = (id) => {
-        const p = level.players?.[id];
-        return p ? { id, name: p.name, no: numbers.get(id) || null, losses: p.losses, positionLabel: '总决赛' } : null;
+        const p = W.hasOwn(level.players, id) ? level.players[id] : null;
+        // 已退赛/淘汰的决赛选手不能再显示为“当前总决赛参赛者”。
+        if (!p || p.losses >= 2 || p.eliminatedAt) return null;
+        return { id, name: p.name, no: numbers.get(id) || null, losses: p.losses, positionLabel: '总决赛' };
       };
       const p1 = one(gf.p1), p2 = one(gf.p2);
       if (!p1 || !p2) return null;
@@ -220,12 +222,14 @@
   function drawRows(level, ids, numbers, currentIds, gfIds, placedLabels) {
     const rows = [];
     for (const id of ids) {
-      const p = level.players?.[id];
+      const p = W.hasOwn(level.players, id) ? level.players[id] : null;
       if (!p) continue;
       let status = 'winner';
       let label = level.started ? '胜者组' : '赛前';
-      if (gfIds.has(id)) {
-        status = level.grandFinal?.completed ? 'finished' : 'grandFinal';
+      const gf = level.grandFinal;
+      const gfStillPlaying = !p.eliminatedAt && p.losses < 2;
+      if (gfIds.has(id) && (gf?.completed || gfStillPlaying)) {
+        status = gf?.completed ? 'finished' : 'grandFinal';
         label = '总决赛';
       } else if (p.eliminatedAt || p.losses >= 2) {
         status = 'eliminated';
@@ -271,7 +275,7 @@
 
   function byeRows(level, numbers) {
     return (level.byes || [])
-      .filter((b) => level.players?.[b.playerId])
+      .filter((b) => W.hasOwn(level.players, b.playerId))
       .map((b) => ({
         playerId: b.playerId,
         name: level.players[b.playerId].name,
@@ -319,7 +323,7 @@
     function placeCard(lane, stage, playerId, result, options) {
       const cols = lane === 'W' ? wStages : lStages;
       const col = cols[stage - 1];
-      const p = safeLevel.players?.[playerId];
+      const p = W.hasOwn(safeLevel.players, playerId) ? safeLevel.players[playerId] : null;
       if (!col || !p) return null;
       const key = `${lane}:${stage}:${playerId}`;
       if (placedStageKeys.has(key)) return null;
@@ -355,7 +359,7 @@
         if (loserCard) lastLossCards.set(h.loserId, loserCard);
       }
       for (const [loserId, card] of lastLossCards) {
-        const p = safeLevel.players?.[loserId];
+        const p = W.hasOwn(safeLevel.players, loserId) ? safeLevel.players[loserId] : null;
         if (p && (p.eliminatedAt || p.losses >= 2)) card.eliminatedHere = true;
       }
 
@@ -384,7 +388,7 @@
       // 没有正在/待赛对阵的存活选手（例如轮空晋级、等待下一阶段）补当前位置。
       const ordered = ids.slice().sort((a, b) => (numbers.get(a) || 0) - (numbers.get(b) || 0));
       for (const id of ordered) {
-        const p = safeLevel.players?.[id];
+        const p = W.hasOwn(safeLevel.players, id) ? safeLevel.players[id] : null;
         if (!p) continue;
         if (p.eliminatedAt || p.losses >= 2 || gfIds.has(id)) continue;
         const pos = playerPosition(safeLevel, tpl, id, live);
@@ -407,8 +411,8 @@
       eliminated: eliminatedRows(safeLevel, numbers, gfIds),
       grandFinal: gf ? {
         p1: gf.p1, p2: gf.p2,
-        name1: safeLevel.players?.[gf.p1]?.name || '',
-        name2: safeLevel.players?.[gf.p2]?.name || '',
+        name1: (W.hasOwn(safeLevel.players, gf.p1) ? safeLevel.players[gf.p1].name : '') || '',
+        name2: (W.hasOwn(safeLevel.players, gf.p2) ? safeLevel.players[gf.p2].name : '') || '',
         no1: numbers.get(gf.p1) || null,
         no2: numbers.get(gf.p2) || null,
         wins1: gf.wins1 || 0,
@@ -556,7 +560,7 @@
 
     function makeSeat(playerId, result, matchId, lane, stage) {
       if (!playerId) return null;
-      const p = safeLevel.players ? safeLevel.players[playerId] : null;
+      const p = W.hasOwn(safeLevel.players, playerId) ? safeLevel.players[playerId] : null;
       if (!p) return null;
       const rank = rankById.get(playerId);
       const isCurrent = !!current && (
@@ -650,9 +654,12 @@
     if (gf) {
       const one = (slot, id) => {
         if (!id) return null;
-        const p = safeLevel.players ? safeLevel.players[id] : null;
+        const p = W.hasOwn(safeLevel.players, id) ? safeLevel.players[id] : null;
         if (!p) return null;
-        const result = gf.completed ? (gf.winnerId === id ? 'win' : 'loss') : 'live';
+        const out = p.eliminatedAt || p.losses >= 2;
+        const result = gf.completed
+          ? (gf.winnerId === id ? 'win' : 'loss')
+          : (out ? 'loss' : 'live');
         const seat = makeSeat(id, result, null, 'GF', 1);
         if (!seat) return null;
         seat.x = gfX;
@@ -673,7 +680,7 @@
       w: gfW,
       h: gfH,
       seatH,
-      status: gf ? (gf.completed ? 'done' : 'live') : 'empty',
+      status: gf ? ((gf.completed || gf.needsManual || safeLevel.finished) ? 'done' : 'live') : 'empty',
       current: !!(current && current.source === 'grandFinal'),
       completed: !!(gf && gf.completed),
       label: gf ? '总决赛 · BO3' : '总决赛',
@@ -726,7 +733,7 @@
     const byesFor = (lane, stage) => (safeLevel.byes || [])
       .filter((b) => b && b.bracket === lane && (lane === 'W' ? b.round === stage : b.stage === stage))
       .map((b) => {
-        const p = safeLevel.players ? safeLevel.players[b.playerId] : null;
+        const p = W.hasOwn(safeLevel.players, b.playerId) ? safeLevel.players[b.playerId] : null;
         return {
           playerId: b.playerId,
           no: numbers.get(b.playerId) || null,
@@ -780,11 +787,15 @@
     const entryH = Math.min(72, Math.max(28, entryPitch - 2));
     const entryStart = rosterTop + Math.max(0, (entryPitch - entryH) / 2);
     const entries = entriesIds.map((id, i) => {
-      const p = safeLevel.players[id];
+      const p = W.hasOwn(safeLevel.players, id) ? safeLevel.players[id] : null;
+      if (!p) return null;
       const rank = rankById.get(id);
       let statusLabel = '赛前';
-      if (gfIds.has(id)) statusLabel = gf && gf.completed ? '总决赛结束' : '总决赛';
-      else if (p.eliminatedAt || p.losses >= 2) statusLabel = rank && rank.status === 'decided' ? `${rank.label} · 淘汰` : '已淘汰';
+      if (gfIds.has(id)) {
+        statusLabel = gf && (gf.completed || gf.needsManual)
+          ? (gf.needsManual ? '总决赛未决' : '总决赛结束')
+          : '总决赛';
+      } else if (p.eliminatedAt || p.losses >= 2) statusLabel = rank && rank.status === 'decided' ? `${rank.label} · 淘汰` : '已淘汰';
       else if (currentIds.has(id)) statusLabel = '当前比赛';
       else if (safeLevel.started) statusLabel = p.bracket === 'L' ? '败者组' : '胜者组';
       return {

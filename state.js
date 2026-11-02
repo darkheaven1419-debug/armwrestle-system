@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const W = window.WACAA || {};
-  const { uid, now, clampInt, getPinyin, safeJsonParse, deepClone, normalizeNameKey, truncateName, shuffle } = W;
+  const { uid, now, clampInt, getPinyin, safeJsonParse, deepClone, normalizeNameKey, truncateName, shuffle, hasOwn } = W;
 
   const STORAGE_KEY = 'wacaa_armwrestle_v1';
   const BACKUP_KEY = 'wacaa_armwrestle_backup';
@@ -140,13 +140,17 @@
   W.isWithdrawn = function isWithdrawn(level, p) {
     if (!p || !p.eliminatedAt) return false;
     const gf = level.grandFinal;
-    if (gf && (p.id === gf.p1 || p.id === gf.p2)) return false;
+    if (gf && (p.id === gf.p1 || p.id === gf.p2)) {
+      // 正常总决赛负者被补到 2 负，不算退赛；只有明确以退赛结束的总决赛，
+      // 其亚军才是退赛者。
+      return gf.endReason === 'withdrawal' && p.id === gf.runnerUpId;
+    }
     return W.recordedLosses(level, p.id) < p.losses;
   };
 
   // N5: 允许在比赛开始后移除选手（因伤退赛等）；退赛可被“全局撤回”撤销
   W.withdrawPlayer = function withdrawPlayer(level, playerId) {
-    const p = level.players[playerId];
+    const p = hasOwn(level.players, playerId) ? level.players[playerId] : null;
     if (!p || p.losses >= 2) return false;
     if (W.pushUndoSnapshot) W.pushUndoSnapshot(level, 'global');
     p.losses = 2;
@@ -158,6 +162,9 @@
       if (!t.match) continue;
       if (!alive.has(t.match.p1) || !alive.has(t.match.p2)) t.match = null;
     }
+    // 若退赛发生在总决赛期间，立即按“另一名决赛选手夺冠”收尾，
+    // 不能留下一个还能继续录局分的未完成总决赛。
+    if (W.resolveGrandFinalWithdrawal) W.resolveGrandFinalWithdrawal(level, playerId);
     return true;
   };
 
@@ -194,12 +201,24 @@
     });
     eliminated.forEach((p, idx) => { p.placement = total - idx; });
     if (level.finished) {
-      if (level.grandFinal?.completed && level.grandFinal.winnerId) {
-        const champ = level.players[level.grandFinal.winnerId];
-        if (champ) champ.placement = 1;
+      const gf = level.grandFinal;
+      if (gf?.completed && gf.winnerId && hasOwn(level.players, gf.winnerId)) {
+        // 只认 players 的自有键：即使导入数据里 winnerId 是 __proto__，
+        // 也不会把 placement 写到 Object.prototype 上。
+        level.players[gf.winnerId].placement = 1;
       } else {
         const alive = ps.filter((p) => !p.eliminatedAt);
         if (alive.length === 1) alive[0].placement = 1;
+      }
+    }
+    /*
+     * 双方决赛选手都已无法继续时，淘汰序号会把“最后被淘汰者”顶到第 1 名，
+     * 相当于猜了一个冠军。人工处理状态下必须把这两个名次留空。
+     */
+    const gf = level.grandFinal;
+    if (gf && gf.needsManual) {
+      for (const id of [gf.p1, gf.p2]) {
+        if (hasOwn(level.players, id)) level.players[id].placement = null;
       }
     }
   };
@@ -322,7 +341,10 @@
 
   function normalizeMatch(raw, players) {
     if (!isObj(raw)) return null;
-    if (!players[raw.p1] || !players[raw.p2] || raw.p1 === raw.p2) return null;
+    // 危险保留键（__proto__/constructor/prototype）即使能通过原型链取到值，
+    // 也不是真实选手；必须用自身属性检查，避免生成幽灵对局。
+    if (!isSafeId(raw.p1) || !isSafeId(raw.p2) || raw.p1 === raw.p2) return null;
+    if (!hasOwn(players, raw.p1) || !hasOwn(players, raw.p2)) return null;
     const bracket = raw.bracket === 'L' ? 'L' : 'W';
     return {
       id: isSafeId(raw.id) ? raw.id : uid(),
@@ -378,7 +400,7 @@
     const order = [];
     const seen = new Set();
     for (const id of Array.isArray(raw.playerOrder) ? raw.playerOrder : []) {
-      if (players[id] && !seen.has(id)) { seen.add(id); order.push(id); }
+      if (hasOwn(players, id) && !seen.has(id)) { seen.add(id); order.push(id); }
     }
     for (const id of Object.keys(players)) if (!seen.has(id)) order.push(id);
     level.playerOrder = order;
@@ -392,7 +414,7 @@
     const draw = [];
     const drawSeen = new Set();
     for (const id of Array.isArray(raw.drawOrder) ? raw.drawOrder : []) {
-      if (players[id] && !drawSeen.has(id)) { drawSeen.add(id); draw.push(id); }
+      if (hasOwn(players, id) && !drawSeen.has(id)) { drawSeen.add(id); draw.push(id); }
     }
     for (const id of order) {
       if (!drawSeen.has(id)) { drawSeen.add(id); draw.push(id); }
@@ -404,7 +426,7 @@
      * 旧数据没有该字段时保持空数组；不把普通胜场伪造成轮空。
      */
     level.byes = (Array.isArray(raw.byes) ? raw.byes : [])
-      .filter((b) => isObj(b) && players[b.playerId])
+      .filter((b) => isObj(b) && isSafeId(b.playerId) && hasOwn(players, b.playerId))
       .slice(0, MAX_PLAYERS_PER_LEVEL * 2)
       .map((b) => ({
         playerId: b.playerId,
@@ -438,7 +460,10 @@
      * round/stage 是新增元数据；旧历史缺失时保留 null，不伪造轮次。
      */
     level.history = (Array.isArray(raw.history) ? raw.history : [])
-      .filter((h) => isObj(h) && players[h.p1] && players[h.p2] && players[h.winnerId] && players[h.loserId])
+      .filter((h) => isObj(h)
+        && isSafeId(h.p1) && isSafeId(h.p2) && isSafeId(h.winnerId) && isSafeId(h.loserId)
+        && hasOwn(players, h.p1) && hasOwn(players, h.p2)
+        && hasOwn(players, h.winnerId) && hasOwn(players, h.loserId))
       .map((h) => ({
         id: isSafeId(h.id) ? h.id : uid(),
         at: numOr(h.at, now()),
@@ -485,13 +510,15 @@
     // 历史中的 L 胜场表示该选手已经完成对应阶段
     for (const h of level.history) {
       if (h.bracket !== 'L' || !Number.isFinite(h.stage)) continue;
-      const winner = players[h.winnerId];
+      const winner = hasOwn(players, h.winnerId) ? players[h.winnerId] : null;
       if (winner) winner.lStage = Math.max(winner.lStage, h.stage);
     }
     const liveLoserMatches = allMatches.filter((m) => m.bracket === 'L');
     for (const m of liveLoserMatches) {
       if (!Number.isFinite(m.stage)) {
-        const a = players[m.p1].lStage, b = players[m.p2].lStage;
+        const pa = hasOwn(players, m.p1) ? players[m.p1] : null;
+        const pb = hasOwn(players, m.p2) ? players[m.p2] : null;
+        const a = pa ? pa.lStage : 0, b = pb ? pb.lStage : 0;
         m.stage = Math.max(1, Math.min(a, b) + 1);
       }
     }
@@ -504,7 +531,7 @@
       for (const m of liveLoserMatches) {
         m.stage = repairStage;
         for (const id of [m.p1, m.p2]) {
-          const p = players[id];
+          const p = hasOwn(players, id) ? players[id] : null;
           if (p) p.lStage = Math.min(p.lStage, repairStage - 1);
         }
       }
@@ -512,7 +539,7 @@
     for (const m of liveLoserMatches) {
       // 已在某阶段中的选手必然已经完成前一阶段
       for (const id of [m.p1, m.p2]) {
-        const p = players[id];
+        const p = hasOwn(players, id) ? players[id] : null;
         if (p) p.lStage = Math.max(p.lStage, m.stage - 1);
       }
     }
@@ -535,19 +562,29 @@
 
   function normalizeGrandFinal(raw, players, warnings) {
     if (raw == null) return null;
-    if (!isObj(raw) || !players[raw.p1] || !players[raw.p2] || raw.p1 === raw.p2) {
+    const validP1 = isObj(raw) && isSafeId(raw.p1) && hasOwn(players, raw.p1);
+    const validP2 = isObj(raw) && isSafeId(raw.p2) && hasOwn(players, raw.p2);
+    if (!validP1 || !validP2 || raw.p1 === raw.p2) {
       warnings.push('有一场总决赛数据无效，已清除');
       return null;
     }
-    const winnerId = raw.winnerId === raw.p1 || raw.winnerId === raw.p2 ? raw.winnerId : null;
+    const winnerId = (raw.winnerId === raw.p1 || raw.winnerId === raw.p2)
+      && isSafeId(raw.winnerId) && hasOwn(players, raw.winnerId) ? raw.winnerId : null;
+    const runnerUpId = (raw.runnerUpId === raw.p1 || raw.runnerUpId === raw.p2)
+      && isSafeId(raw.runnerUpId) && hasOwn(players, raw.runnerUpId) ? raw.runnerUpId : null;
+    const completed = !!raw.completed && !!winnerId;
     return {
       p1: raw.p1,
       p2: raw.p2,
       wins1: clampInt(numOr(raw.wins1, 0), 0, 2),
       wins2: clampInt(numOr(raw.wins2, 0), 0, 2),
-      completed: !!raw.completed && !!winnerId,
+      completed,
       winnerId,
-      runnerUpId: raw.runnerUpId === raw.p1 || raw.runnerUpId === raw.p2 ? raw.runnerUpId : null,
+      runnerUpId,
+      // 总决赛结束原因：正常 BO3 或决赛期间退赛；旧数据没有该字段时按正常结束处理。
+      endReason: completed ? (raw.endReason === 'withdrawal' ? 'withdrawal' : 'normal') : null,
+      // 双方都无法继续时保留为人工处理的未决状态，不猜测冠军。
+      needsManual: !completed && !!raw.needsManual,
     };
   }
 
@@ -683,7 +720,7 @@
     const order = [];
     const seen = new Set();
     for (const id of (Array.isArray(level.playerOrder) ? level.playerOrder : [])) {
-      if (players[id] && !seen.has(id)) { seen.add(id); order.push(id); }
+      if (hasOwn(players, id) && !seen.has(id)) { seen.add(id); order.push(id); }
     }
     for (const id of Object.keys(players)) {
       if (!seen.has(id)) { seen.add(id); order.push(id); }

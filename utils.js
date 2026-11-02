@@ -7,6 +7,11 @@
   W.now = () => Date.now();
   W.deepClone = (x) => JSON.parse(JSON.stringify(x));
   W.safeJsonParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
+  /*
+   * 只认对象自身的键。players 是普通对象，`players['__proto__']` 会解析到
+   * 原型链上，不能用来判断选手是否存在；导入的 JSON 也可能带同名自有键。
+   */
+  W.hasOwn = (obj, key) => !!obj && Object.prototype.hasOwnProperty.call(obj, key);
   W.clampInt = (x, a, b) => {
     const n = Number.parseInt(String(x), 10);
     return Number.isNaN(n) ? a : Math.max(a, Math.min(b, n));
