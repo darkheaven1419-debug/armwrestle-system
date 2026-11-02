@@ -629,6 +629,49 @@
     return { prev, limit };
   };
 
+  /*
+   * 退回赛前设置：只重置当前级别，保留选手名单、报名顺序与级别设置。
+   * - 保留：players（id/姓名/拼音）、playerOrder 的报名顺序、名称、桌数、自动打乱开关；
+   * - 清除：待赛对阵、桌上比赛、比赛历史、撤销栈、总决赛、阶段横幅、进度与名次；
+   * - 选手回到未开赛状态（0 负、未淘汰、胜者组）。
+   * playerOrder 从不参与比赛过程，也绝不从对阵/历史反推，因此不会被“比赛顺序”污染。
+   * 不 touch 其他级别；调用方负责保存与重绘。
+   */
+  W.resetLevelToSetup = function resetLevelToSetup(level) {
+    if (!level || !level.started) return false;
+    // 名单顺序按现有 playerOrder 保留；若个别 id 已失效则顺带剔除，绝不凭空重排。
+    const players = level.players || {};
+    const order = [];
+    const seen = new Set();
+    for (const id of (Array.isArray(level.playerOrder) ? level.playerOrder : [])) {
+      if (players[id] && !seen.has(id)) { seen.add(id); order.push(id); }
+    }
+    for (const id of Object.keys(players)) {
+      if (!seen.has(id)) { seen.add(id); order.push(id); }
+    }
+    level.playerOrder = order;
+
+    level.started = false;
+    level.finished = false;
+    level.wRound = 0;
+    level.pendingMatches = [];
+    level.tables = [];
+    level.history = [];
+    level.undoStack = [];
+    level.grandFinal = null;
+    level.banners = { top8Shown: false, top3Shown: false, gfShown: false };
+    for (const p of Object.values(players)) {
+      p.losses = 0;
+      p.eliminatedAt = null;
+      p.eliminatedSeq = null;
+      p.dropRound = null;
+      p.lStage = 0;
+      p.placement = null;
+      p.bracket = 'W';
+    }
+    return true;
+  };
+
   W.deletePlayer = function deletePlayer(level, playerId) {
     if (level.started) return;
     delete level.players[playerId];

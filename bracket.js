@@ -96,6 +96,55 @@
     return pendingOf(level).some((m) => m && m.bracket === 'L' && W.isLoserStageReady(level, m));
   }
 
+  function isPlayerAlive(level, id) {
+    const p = level.players && level.players[id];
+    return !!p && p.losses < 2 && !p.eliminatedAt;
+  }
+
+  /*
+   * 「下一场」的唯一挑选实现：fillTables（真实排桌）和 getMatchupView
+   * （界面预览）都从这里取结果，避免两套逻辑各自计算导致
+   * “界面显示 3 号 vs 4 号、实际却先上 5 号 vs 6 号”。
+   *
+   * 优先级与波次闸门保持一致：
+   * - 败者组波次进行中：只看已就绪的 L，绝不插入下一波 W；
+   * - 否则先看 W，再看已就绪的 L；
+   * - 同一优先级内保持 pendingMatches 的现有顺序；
+   * - 双方有一方还在桌上的比赛不能上场（waiting=true 仅供界面提示）。
+   *
+   * 返回 { index, waiting }，没有候选时返回 null。
+   */
+  function pickNextPending(level, inUse) {
+    const pending = pendingOf(level);
+    const used = inUse || new Set();
+    const allowWinner = !hasActiveLoserWave(level);
+    let winnerIndex = -1;
+    let loserIndex = -1;
+    let blockedWinner = -1;
+    let blockedLoser = -1;
+    for (let i = 0; i < pending.length; i++) {
+      const m = pending[i];
+      if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
+      if (!isPlayerAlive(level, m.p1) || !isPlayerAlive(level, m.p2)) continue;
+      const busy = used.has(m.p1) || used.has(m.p2);
+      if (m.bracket === 'W') {
+        if (!allowWinner) continue;
+        if (busy) { if (blockedWinner === -1) blockedWinner = i; continue; }
+        if (winnerIndex === -1) winnerIndex = i;
+        continue;
+      }
+      // 闸门未满足的 L 永远不进入候选，更不会提前开打
+      if (!W.isLoserStageReady(level, m)) continue;
+      if (busy) { if (blockedLoser === -1) blockedLoser = i; continue; }
+      if (loserIndex === -1) loserIndex = i;
+    }
+    if (winnerIndex !== -1) return { index: winnerIndex, waiting: false };
+    if (loserIndex !== -1) return { index: loserIndex, waiting: false };
+    if (blockedWinner !== -1) return { index: blockedWinner, waiting: true };
+    if (blockedLoser !== -1) return { index: blockedLoser, waiting: true };
+    return null;
+  }
+
   /*
    * 只读对阵视图（不修改 level）：
    * - 当前对阵：所有正在桌上的比赛；若总决赛未完成，也计入当前对阵。
@@ -144,39 +193,23 @@
     // 总决赛期间不再从旧队列取“下一组”，避免显示已经不存在的赛程。
     if (gfPending) { view.nextStatus = 'grandFinal'; return view; }
 
-    const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
     /*
-     * 展示与引擎共用同一波次顺序：
-     * - 败者组波次进行中，只展示已就绪的 L，不再展示下一波 W；
-     * - 否则先展示 W，再展示已就绪的 L。
-     * 未就绪的 L 永远不会成为“下一组”。
+     * 与引擎共用 pickNextPending：界面显示的下一组，就是 fillTables
+     * 下一步真正会挑中的那一场，不再保留第二套排序逻辑。
+     * 未就绪的 L 永远不会成为“下一组”；双方被占用的只作为等待提示。
      */
-    const loserWave = hasActiveLoserWave(level);
-    const ordered = [];
-    if (!loserWave) ordered.push(...pending.filter((m) => m && m.bracket === 'W'));
-    ordered.push(...pending.filter((m) => m && m.bracket === 'L' && W.isLoserStageReady(level, m)));
-    let blocked = null;
-    for (const m of ordered) {
-      if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
-      if (!isAlive(m.p1) || !isAlive(m.p2)) continue;
-      const candidate = {
+    const picked = pickNextPending(level, inUse);
+    if (picked) {
+      const m = pendingOf(level)[picked.index];
+      view.next = {
         source: 'pending', tableNo: null, bracket: m.bracket,
         round: m.round ?? null, stage: m.stage ?? null,
-        p1: m.p1, p2: m.p2, matchId: m.id || null, waiting: false,
+        p1: m.p1, p2: m.p2, matchId: m.id || null, waiting: !!picked.waiting,
       };
-      if (inUse.has(m.p1) || inUse.has(m.p2)) {
-        if (!blocked) blocked = Object.assign({}, candidate, { waiting: true });
-        continue;
-      }
-      view.next = candidate;
-      view.nextStatus = 'ready';
+      view.nextStatus = picked.waiting ? 'waiting' : 'ready';
       return view;
     }
-
-    if (blocked) {
-      view.next = blocked;
-      view.nextStatus = 'waiting';
-    } else if (view.current.length) {
+    if (view.current.length) {
       view.nextStatus = 'pendingAfterCurrent';
     } else {
       view.nextStatus = 'none';
@@ -338,9 +371,15 @@
     const cur = level.tables.length;
     if (cur === want) return;
     if (cur > want) {
+      /*
+       * 缩桌时被撤掉的比赛回到候场队列末尾，绝不插到队首：
+       * 队首正是界面已经展示给裁判的「下一组上场」。若插到队首，
+       * 空出来的桌子会先打这场被撤回的比赛，和看板显示的对不上。
+       * 这里只调整本地出场顺序，不改变双败赛制的任何对阵关系。
+       */
       for (let i = want; i < cur; i++) {
         const t = level.tables[i];
-        if (t?.match) { t.match.tableNo = null; level.pendingMatches.unshift(t.match); }
+        if (t?.match) { t.match.tableNo = null; level.pendingMatches.push(t.match); }
       }
       level.tables = level.tables.slice(0, want);
       if (eventsOut) eventsOut.push({ type: 'tableAdjusted', count: want });
@@ -364,22 +403,9 @@
    * 两种组别因此不会同时出现在桌上，S1 也就不可能与 W2 并行。
    */
   W.selectNextPendingIndex = function selectNextPendingIndex(level, inUse) {
-    const pending = Array.isArray(level.pendingMatches) ? level.pendingMatches : [];
-    const used = inUse || new Set();
-    const allowWinner = !hasActiveLoserWave(level);
-    let fallback = -1;
-    for (let i = 0; i < pending.length; i++) {
-      const m = pending[i];
-      if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
-      if (used.has(m.p1) || used.has(m.p2)) continue;
-      if (m.bracket === 'W') {
-        if (allowWinner) return i;
-        continue;
-      }
-      // 只用阶段已满足的败者组兜底，绝不提前开打
-      if (fallback === -1 && W.isLoserStageReady(level, m)) fallback = i;
-    }
-    return fallback;
+    const picked = pickNextPending(level, inUse);
+    // waiting 表示双方被占用，不能上桌；fillTables 只接收真正可安排的场次。
+    return picked && !picked.waiting ? picked.index : -1;
   };
 
   W.fillTables = function fillTables(level) {
@@ -583,13 +609,14 @@
     return events;
   };
 
-  // C1 helper: 安全的桌子缩减——把比赛收回到 pendingMatches
+  // C1 helper: 安全的桌子缩减——把比赛收回到 pendingMatches（保持队列顺序）
   W.safelyReduceTables = function safelyReduceTables(level, targetCount) {
     const cur = level.tables.length;
     if (cur <= targetCount) return;
     for (let i = targetCount; i < cur; i++) {
       const t = level.tables[i];
-      if (t?.match) { t.match.tableNo = null; level.pendingMatches.unshift(t.match); }
+      // 追加到队尾，避免被撤回的比赛插队到界面已展示的「下一组」之前
+      if (t?.match) { t.match.tableNo = null; level.pendingMatches.push(t.match); }
     }
     level.tables = level.tables.slice(0, targetCount);
   };
