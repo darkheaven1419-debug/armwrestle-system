@@ -585,10 +585,9 @@
     for (const h of layout.headers) canvas.appendChild(renderSxHeader(h));
     canvas.appendChild(el('div', {
       class: 'sx-side-head',
-      style: `left:${layout.entryX}px;top:14px;width:${layout.entryW}px;`,
-    }, ['选手 · 编号']));
+      style: `left:${layout.entryX}px;top:10px;width:${layout.entryW}px;`,
+    }, ['选手 · 编号 · 状态']));
     canvas.appendChild(renderSxRoster(layout));
-    canvas.appendChild(renderSxRank(layout));
     canvas.appendChild(renderSxGrandFinal(layout));
     return canvas;
   }
@@ -713,7 +712,7 @@
   function renderSxRoster(layout) {
     const roster = el('div', {
       class: 'sx-roster',
-      style: `left:${layout.entryX}px;top:${layout.wLaneTop}px;width:${layout.entryW}px;height:${layout.wLaneH}px;`,
+      style: `left:${layout.entryX}px;top:${layout.rosterTop}px;width:${layout.entryW}px;height:${layout.rosterH}px;`,
     }, []);
     for (const entry of layout.entries) {
       roster.appendChild(el('div', {
@@ -721,7 +720,7 @@
           + (entry.current ? ' is-current' : '')
           + (entry.eliminated ? ' is-out' : ''),
         'data-player-id': entry.id,
-        style: `top:${entry.y - layout.wLaneTop}px;height:${entry.h}px;`,
+        style: `top:${entry.y - layout.rosterTop}px;height:${entry.h}px;`,
       }, [
         el('span', { class: 'sx-entry-no' }, [entry.no ? `#${entry.no}` : '—']),
         el('div', { class: 'sx-entry-body' }, [
@@ -732,31 +731,6 @@
       ]));
     }
     return roster;
-  }
-
-  function renderSxRank(layout) {
-    const panel = el('div', {
-      class: 'sx-rank',
-      style: `left:${layout.rank.x}px;top:${layout.rank.y}px;width:${layout.rank.w}px;height:${layout.rank.h}px;`,
-    }, [
-      el('div', { class: 'sx-rank-hd' }, [
-        el('span', { class: 'sx-rank-title' }, ['最终排名']),
-        el('span', { class: 'sx-rank-count' }, [`${layout.rank.total} 人`]),
-      ]),
-    ]);
-    const list = el('div', { class: 'sx-rank-list' }, []);
-    for (const row of layout.rank.rows) {
-      list.appendChild(el('div', {
-        class: 'sx-rank-row'
-          + (row.status === 'decided' ? ' is-decided' : ' is-pending')
-          + (row.place === 1 ? ' is-champion' : ''),
-      }, [
-        el('span', { class: 'sx-rank-place' }, [row.label]),
-        el('span', { class: 'sx-rank-name', title: row.name }, [row.name]),
-      ]));
-    }
-    panel.appendChild(list);
-    return panel;
   }
 
   function renderSxGrandFinal(layout) {

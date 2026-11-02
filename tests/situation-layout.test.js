@@ -62,6 +62,17 @@ test('不同人数使用不同阶段结构，而不是固定列数', () => {
   assert.equal(twenty.lNodes[0].length, twenty.template.lStages[0].matches);
 });
 
+test('主图不再为排名栏预留宽度，左侧名单约占整图两成', () => {
+  for (const n of [3, 8, 11, 20]) {
+    const { layout } = layoutOf(n);
+    assert.equal(layout.rank.hidden, true);
+    assert.equal(layout.rank.rows.length, n, '排名数据仍保留');
+    assert.equal(layout.width, layout.gf.x + layout.gf.w + layout.pad, '宽度止于总决赛');
+    assert.ok(layout.entryW / layout.width >= 0.19, `${n} 人左侧栏应占约两成`);
+    assert.ok(layout.rosterH >= layout.wLaneH, '名单应贯穿整图高度');
+  }
+});
+
 test('少于 3 人或超过 20 人只返回明确提示，不生成位置图', () => {
   for (const n of [2, 21]) {
     const { layout } = layoutOf(n);

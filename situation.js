@@ -424,18 +424,16 @@
 
   /* ==================== 横向位置图布局（只读，不参与配对） ==================== */
   const SX = Object.freeze({
-    pad: 24,
-    entryW: 164,
+    pad: 18,
     entryGap: 34,
-    matchW: 176,
-    colGap: 36,
-    laneGap: 96,
-    top: 78,
-    rankW: 226,
+    matchW: 184,
+    colGap: 30,
+    laneGap: 36,
+    top: 52,
     minScale: 0.6,
     maxScale: 1.8,
     // 默认适应屏幕，但不为了塞进屏幕把姓名缩到不可读。
-    fitFloor: 0.72,
+    fitFloor: 0.7,
   });
 
   function sxColX(col, entryX) {
@@ -529,16 +527,18 @@
     const lLaneH = lRows * rowStep;
     const laneBottom = lLaneTop + lLaneH;
     const entryX = SX.pad;
-    const entryRight = entryX + SX.entryW;
-    const firstColX = sxColX(1, entryRight);
     const wCount = tpl.wStages.length;
     const lCount = tpl.lStages.length;
     const gfCol = Math.max(wCount, lCount + 1) + 1;
-    const gfX = sxColX(gfCol, entryRight);
     const gfW = SX.matchW + 22;
-    const rankX = gfX + gfW + 34;
-    const width = rankX + SX.rankW + SX.pad;
-    const height = laneBottom + SX.pad + 8;
+    // 左侧名单按整张图宽度约 22% 分配，同时限制上限，避免吞掉比赛位置图。
+    const colSpan = (gfCol - 1) * (SX.matchW + SX.colGap) + gfW + SX.pad;
+    const entryW = Math.max(300, Math.min(520, Math.round((SX.entryGap + SX.pad * 2 + colSpan) * 0.28)));
+    const entryRight = entryX + entryW;
+    const firstColX = sxColX(1, entryRight);
+    const gfX = sxColX(gfCol, entryRight);
+    const width = gfX + gfW + SX.pad;
+    const height = laneBottom + SX.pad;
 
     const matches = sxCollectMatches(safeLevel);
     const byStage = new Map();
@@ -737,7 +737,7 @@
       headers.push({
         lane: 'W', stage: st.stage,
         x: firstColX + (st.stage - 1) * (SX.matchW + SX.colGap),
-        y: wLaneTop - 38,
+        y: wLaneTop - 32,
         w: SX.matchW,
         label: `胜者组第${st.stage}轮`,
         byes: byesFor('W', st.stage),
@@ -747,7 +747,7 @@
       headers.push({
         lane: 'L', stage: st.stage,
         x: firstColX + st.stage * (SX.matchW + SX.colGap),
-        y: lLaneTop - 38,
+        y: lLaneTop - 32,
         w: SX.matchW,
         label: `败者组第${st.stage}阶段`,
         byes: byesFor('L', st.stage),
@@ -773,8 +773,12 @@
       d: sxEdgePath(firstColX, laneBottom + 14, sxColX(lastLCol, entryRight) + SX.matchW, laneBottom + 14),
     });
 
-    const entryRowH = Math.max(26, Math.min(38, (wLaneH - 6) / Math.max(1, n)));
-    const entryStart = wLaneTop + (wLaneH - entryRowH * n) / 2;
+    // 名单贯穿整张图的高度，优先给姓名和状态留出足够行高。
+    const rosterTop = wLaneTop;
+    const rosterH = laneBottom - wLaneTop;
+    const entryPitch = Math.max(30, rosterH / Math.max(1, n));
+    const entryH = Math.min(72, Math.max(28, entryPitch - 2));
+    const entryStart = rosterTop + Math.max(0, (entryPitch - entryH) / 2);
     const entries = entriesIds.map((id, i) => {
       const p = safeLevel.players[id];
       const rank = rankById.get(id);
@@ -792,9 +796,9 @@
         current: currentIds.has(id),
         eliminated: !!(p.eliminatedAt || p.losses >= 2),
         x: entryX,
-        y: entryStart + i * entryRowH,
-        w: SX.entryW,
-        h: entryRowH - 2,
+        y: entryStart + i * entryPitch,
+        w: entryW,
+        h: entryH,
       };
     });
 
@@ -805,9 +809,6 @@
       status: r.status,
       losses: r.losses,
     }));
-    // 排名行不再拉满整个池高，避免少数选手时每行过高、20 人时又过于松散。
-    const rankRowH = n >= 16 ? 33 : 54;
-    const rankH = Math.min(laneBottom - wLaneTop, 46 + n * rankRowH);
 
     return {
       supported: true,
@@ -822,7 +823,10 @@
       lLaneH,
       laneBottom,
       entryX,
-      entryW: SX.entryW,
+      entryW,
+      rosterTop,
+      rosterH,
+      pad: SX.pad,
       matchW: SX.matchW,
       seatH,
       colX: (c) => sxColX(c, entryRight),
@@ -832,11 +836,9 @@
       headers,
       entries,
       edges,
+      // 排名数据继续保留，主图不再为独立排名栏预留空间。
       rank: {
-        x: rankX,
-        y: wLaneTop,
-        w: SX.rankW,
-        h: rankH,
+        hidden: true,
         rows: rankRows,
         total: n,
       },
