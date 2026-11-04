@@ -101,6 +101,61 @@
     return !!p && p.losses < 2 && !p.eliminatedAt;
   }
 
+  /* ---- 跨级别占用（只做调度：不改姓名、不合并 playerId、不写持久化字段） ---- */
+
+  /*
+   * 跨级别身份：只按规范化姓名判断（NFKC + 去空格 + 大小写归一）。
+   * 选手真实姓名、拼音、playerId、成绩记录都不参与，也不会被改写。
+   */
+  function identityKeyOf(level, id) {
+    if (!level || !level.players || !hasOwn(level.players, id)) return '';
+    const p = level.players[id];
+    if (!p || typeof p.name !== 'string') return '';
+    return W.identityKey(p.name);
+  }
+
+  /*
+   * 收集一个级别当前占用的选手：场上比赛双方 + 未完成的总决赛双方。
+   * 未开赛或已结束的级别不占人；只读，不修改级别数据。
+   */
+  function collectLevelBusy(level, out, excludeLevelId) {
+    if (!level || level.id === excludeLevelId) return out;
+    if (!level.started || level.finished) return out;
+    const levelName = level.name || '其他级别';
+    const push = (id) => {
+      const key = identityKeyOf(level, id);
+      if (key && !out.has(key)) out.set(key, levelName);
+    };
+    for (const t of level.tables || []) { const m = t && t.match; if (m) { push(m.p1); push(m.p2); } }
+    const gf = level.grandFinal;
+    if (gf && !gf.completed) { push(gf.p1); push(gf.p2); }
+    return out;
+  }
+
+  /*
+   * 全局跨级别占用表：Map<身份键, 占用级别名>。
+   * 调用方必须只传入同一赛事内的级别（不同赛事互不影响）。
+   */
+  W.crossLevelBusyMap = function crossLevelBusyMap(levels, excludeLevelId) {
+    const out = new Map();
+    for (const lv of levels || []) collectLevelBusy(lv, out, excludeLevelId);
+    return out;
+  };
+
+  /* 这场比赛双方里，有哪些正被其他级别占用（用于「等待某人完成某级别比赛」） */
+  function crossBlockedOf(level, m, blocked) {
+    if (!blocked || typeof blocked.get !== 'function' || !blocked.size) return [];
+    const out = [];
+    for (const id of [m.p1, m.p2]) {
+      const key = identityKeyOf(level, id);
+      const levelName = key ? blocked.get(key) : '';
+      if (!levelName) continue;
+      const p = hasOwn(level.players, id) ? level.players[id] : null;
+      out.push({ playerId: id, name: p ? p.name : '', levelName });
+    }
+    return out;
+  }
+
   /*
    * 「下一场」的唯一挑选实现：fillTables（真实排桌）和 getMatchupView
    * （界面预览）都从这里取结果，避免两套逻辑各自计算导致
@@ -112,9 +167,13 @@
    * - 同一优先级内保持 pendingMatches 的现有顺序；
    * - 双方有一方还在桌上的比赛不能上场（waiting=true 仅供界面提示）。
    *
-   * 返回 { index, waiting }，没有候选时返回 null。
+   * blocked 是可选的跨级别占用表（Map<身份键, 级别名>）。被跨级别占用的选手
+   * 与“还在本级别桌上”等价：不排桌，只作为 waiting 候选给出原因。
+   * 它只排除候选、从不插入候选，因此不改变任何 W/L 波次或优先级规则。
+   *
+   * 返回 { index, waiting, crossBlocked }，没有候选时返回 null。
    */
-  function pickNextPending(level, inUse) {
+  function pickNextPending(level, inUse, blocked) {
     const pending = pendingOf(level);
     const used = inUse || new Set();
     const allowWinner = !hasActiveLoserWave(level);
@@ -122,26 +181,35 @@
     let loserIndex = -1;
     let blockedWinner = -1;
     let blockedLoser = -1;
+    let blockedWinnerCross = null;
+    let blockedLoserCross = null;
     for (let i = 0; i < pending.length; i++) {
       const m = pending[i];
       if (!m || !m.p1 || !m.p2 || m.p1 === m.p2) continue;
       if (!isPlayerAlive(level, m.p1) || !isPlayerAlive(level, m.p2)) continue;
-      const busy = used.has(m.p1) || used.has(m.p2);
+      const cross = crossBlockedOf(level, m, blocked);
+      const busy = cross.length > 0 || used.has(m.p1) || used.has(m.p2);
       if (m.bracket === 'W') {
         if (!allowWinner) continue;
-        if (busy) { if (blockedWinner === -1) blockedWinner = i; continue; }
+        if (busy) {
+          if (blockedWinner === -1) { blockedWinner = i; blockedWinnerCross = cross.length ? cross : null; }
+          continue;
+        }
         if (winnerIndex === -1) winnerIndex = i;
         continue;
       }
       // 闸门未满足的 L 永远不进入候选，更不会提前开打
       if (!W.isLoserStageReady(level, m)) continue;
-      if (busy) { if (blockedLoser === -1) blockedLoser = i; continue; }
+      if (busy) {
+        if (blockedLoser === -1) { blockedLoser = i; blockedLoserCross = cross.length ? cross : null; }
+        continue;
+      }
       if (loserIndex === -1) loserIndex = i;
     }
-    if (winnerIndex !== -1) return { index: winnerIndex, waiting: false };
-    if (loserIndex !== -1) return { index: loserIndex, waiting: false };
-    if (blockedWinner !== -1) return { index: blockedWinner, waiting: true };
-    if (blockedLoser !== -1) return { index: blockedLoser, waiting: true };
+    if (winnerIndex !== -1) return { index: winnerIndex, waiting: false, crossBlocked: null };
+    if (loserIndex !== -1) return { index: loserIndex, waiting: false, crossBlocked: null };
+    if (blockedWinner !== -1) return { index: blockedWinner, waiting: true, crossBlocked: blockedWinnerCross };
+    if (blockedLoser !== -1) return { index: blockedLoser, waiting: true, crossBlocked: blockedLoserCross };
     return null;
   }
 
@@ -152,8 +220,12 @@
    *   且没有被其他桌子占用的比赛。若队列里的比赛都在等当前桌结束，
    *   返回队首那场并标记 waiting。
    * 轮空不会进入 pendingMatches，因此不会被误当作下一组。
+   *
+   * blocked 可选：跨级别占用表。传入后，被其他级别占用的比赛只作为
+   * waiting 候选返回，并在 next.crossBlocked 里给出“谁在哪个级别”；
+   * 不传时与原来的单级别视图完全一致。
    */
-  W.getMatchupView = function getMatchupView(level) {
+  W.getMatchupView = function getMatchupView(level, blocked) {
     const view = { current: [], next: null, nextStatus: 'none' };
     if (!level || !level.started) { view.nextStatus = 'notStarted'; return view; }
     if (level.finished) { view.nextStatus = 'finished'; return view; }
@@ -198,13 +270,14 @@
      * 下一步真正会挑中的那一场，不再保留第二套排序逻辑。
      * 未就绪的 L 永远不会成为“下一组”；双方被占用的只作为等待提示。
      */
-    const picked = pickNextPending(level, inUse);
+    const picked = pickNextPending(level, inUse, blocked);
     if (picked) {
       const m = pendingOf(level)[picked.index];
       view.next = {
         source: 'pending', tableNo: null, bracket: m.bracket,
         round: m.round ?? null, stage: m.stage ?? null,
         p1: m.p1, p2: m.p2, matchId: m.id || null, waiting: !!picked.waiting,
+        crossBlocked: Array.isArray(picked.crossBlocked) ? picked.crossBlocked : [],
       };
       view.nextStatus = picked.waiting ? 'waiting' : 'ready';
       return view;
@@ -215,6 +288,79 @@
       view.nextStatus = 'none';
     }
     return view;
+  };
+
+  /*
+   * 多级别全局计划：真实排桌与「下一组」预览共用同一套结果。
+   *
+   * 第一趟按 levels 的给定顺序排桌：每排上一个级别，它的桌子立刻进入
+   * 后面级别看到的跨级别占用表，因此同一个人不会被两个级别同时排上。
+   * 第二趟按同样顺序计算下一组，并把已经预告出去的双方加入预留，
+   * 保证同一选手最多被一个级别预告，且预告的比赛就是实际会先排上的那场。
+   *
+   * 结果只依赖传入顺序和当前状态，不依赖 UI 面板的渲染时机，不持久化。
+   * 返回 Map<levelId, view>。
+   */
+  W.planMultiLevel = function planMultiLevel(levels) {
+    const list = (levels || []).filter(Boolean);
+    // 第一趟：真实排桌
+    for (const lv of list) {
+      if (!lv.started || lv.finished) continue;
+      W.fillTables(lv, W.crossLevelBusyMap(list, lv.id));
+    }
+    // 第二趟：下一组预览 + 全局预留（固定顺序，先到先得）
+    const views = new Map();
+    const reserved = new Map();
+    for (const lv of list) {
+      const blocked = W.crossLevelBusyMap(list, lv.id);
+      for (const [key, name] of reserved) if (!blocked.has(key)) blocked.set(key, name);
+      const view = W.getMatchupView(lv, blocked);
+      views.set(lv.id, view);
+      if (view.next && !view.next.waiting) {
+        const key1 = identityKeyOf(lv, view.next.p1);
+        const key2 = identityKeyOf(lv, view.next.p2);
+        if (key1) reserved.set(key1, lv.name);
+        if (key2) reserved.set(key2, lv.name);
+      }
+    }
+    return views;
+  };
+
+  /*
+   * 旧数据兼容：只读检测“同一个选手同时出现在两个级别桌上/总决赛”。
+   * 不取消比赛、不判胜负、不删记录；调用方只负责提示，新排桌时该选手
+   * 仍会被占用表挡住，不会产生新的冲突比赛。
+   * 返回 [{ key, name, levelIds, levelNames }]
+   */
+  W.crossLevelConflicts = function crossLevelConflicts(levels) {
+    const seen = new Map();
+    const add = (lv, id) => {
+      const key = identityKeyOf(lv, id);
+      if (!key) return;
+      const p = hasOwn(lv.players, id) ? lv.players[id] : null;
+      let rec = seen.get(key);
+      if (!rec) {
+        rec = { key, name: p ? p.name : '', levelIds: [], levelNames: [] };
+        seen.set(key, rec);
+      }
+      if (rec.levelIds.indexOf(lv.id) === -1) {
+        rec.levelIds.push(lv.id);
+        rec.levelNames.push(lv.name || '');
+      }
+    };
+    for (const lv of levels || []) {
+      if (!lv || !lv.started || lv.finished) continue;
+      for (const t of lv.tables || []) {
+        const m = t && t.match;
+        if (!m) continue;
+        add(lv, m.p1); add(lv, m.p2);
+      }
+      const gf = lv.grandFinal;
+      if (gf && !gf.completed) { add(lv, gf.p1); add(lv, gf.p2); }
+    }
+    const out = [];
+    for (const rec of seen.values()) if (rec.levelIds.length >= 2) out.push(rec);
+    return out;
   };
 
   /* ---- 对阵生成 ---- */
@@ -415,18 +561,23 @@
    * 闸门未满足的 L 永远不进入兜底；W 也不会在 L 波次中途抢占空桌。
    * 两种组别因此不会同时出现在桌上，S1 也就不可能与 W2 并行。
    */
-  W.selectNextPendingIndex = function selectNextPendingIndex(level, inUse) {
-    const picked = pickNextPending(level, inUse);
-    // waiting 表示双方被占用，不能上桌；fillTables 只接收真正可安排的场次。
+  W.selectNextPendingIndex = function selectNextPendingIndex(level, inUse, blocked) {
+    const picked = pickNextPending(level, inUse, blocked);
+    // waiting 表示双方被占用（本级别桌上或跨级别），不能上桌；
+    // fillTables 只接收真正可安排的场次。
     return picked && !picked.waiting ? picked.index : -1;
   };
 
-  W.fillTables = function fillTables(level) {
+  /*
+   * blocked 可选：跨级别占用表。不传时与原来的单级别排桌完全一致。
+   * 这里只“挑哪一场上桌”，不重排 pendingMatches、不改波次与桌数逻辑。
+   */
+  W.fillTables = function fillTables(level, blocked) {
     for (const t of level.tables) {
       if (t.match) continue;
       const inUse = new Set();
       for (const tt of level.tables) { if (tt.match) { inUse.add(tt.match.p1); inUse.add(tt.match.p2); } }
-      const idx = W.selectNextPendingIndex(level, inUse);
+      const idx = W.selectNextPendingIndex(level, inUse, blocked);
       if (idx === -1) continue;
       const m = level.pendingMatches.splice(idx, 1)[0];
       m.tableNo = t.tableNo; t.match = m;
@@ -692,7 +843,9 @@
     for (let i = 0; i < firstRound.length; i += 2) {
       level.pendingMatches.push({ id: uid(), createdAt: now(), bracket: 'W', round: 1, p1: firstRound[i], p2: firstRound[i + 1], tableNo: null });
     }
-    W.fillTables(level);
+    // options.blocked：多级别开赛时传入同赛事其他级别的占用表，
+    // 避免开赛瞬间就把同一名选手同时排到两张桌子。不传时行为不变。
+    W.fillTables(level, options && options.blocked);
     events.push({ type: 'started' });
     return events;
   };

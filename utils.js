@@ -55,6 +55,19 @@
 
   W.normalizeNameKey = (name) => (name || '').trim().toLowerCase();
 
+  /*
+   * 跨级别占用判断用的身份键：只做规范化，绝不改写真实姓名、绝不合并 playerId。
+   * NFKC 统一全角/半角（含全角空格、全角字母），去掉所有空白，大小写归一。
+   * 不做拼音、不做模糊匹配；不同名字永远得到不同的键。
+   * 仅用于“同一个人是否正在别的级别比赛”的判断，不参与任何成绩或对阵计算。
+   */
+  W.identityKey = function identityKey(name) {
+    return String(name ?? '')
+      .normalize('NFKC')
+      .replace(/\s+/g, '')
+      .toLowerCase();
+  };
+
   W.getPinyin = function getPinyin(name) {
     const n = (name ?? '').trim();
     if (!n) return '';

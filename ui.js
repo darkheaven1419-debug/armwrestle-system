@@ -336,6 +336,26 @@
     W.toast('已退回赛前设置，可补充选手后重新开始');
   }
 
+  /*
+   * 跨级别占用冲突提示：只针对旧数据里已经发生的“同一个人同时在两张桌上”。
+   * 只提示、不修改任何比赛；新排桌仍由占用表挡住该选手，不会产生新冲突。
+   * 传入 onlyLevelId 时只显示与该级别有关的冲突（单级别详情页使用）。
+   */
+  function renderCrossLevelConflict(conflicts, onlyLevelId) {
+    const list = (conflicts || []).filter((c) => !onlyLevelId || c.levelIds.indexOf(onlyLevelId) !== -1);
+    if (!list.length) return null;
+    const text = list.map((c) => `${c.name}（${c.levelNames.join('、')}）`).join('；');
+    return el('section', { class: 'card cross-conflict', role: 'status', 'aria-live': 'polite' }, [
+      el('div', { class: 'card-bd' }, [
+        el('div', { class: 'row between cross-conflict-row' }, [
+          el('div', { class: 'title cross-conflict-title' }, ['跨级别占用冲突']),
+          el('span', { class: 'badge danger' }, [`${list.length} 人`]),
+        ]),
+        el('div', { class: 'hint' }, [`${text} 同时出现在多个级别的比赛中。已保留现有比赛，不会再安排新的冲突对阵；请先处理场上比赛。`]),
+      ]),
+    ]);
+  }
+
   /* ==================== 多级别模式 ==================== */
   function renderMultiLevel(tournamentId, levelIds) {
     const t = W.state.tournaments.find((x) => x.id === tournamentId); if (!t) return W.setRoute({ name: 'home' });
@@ -343,25 +363,37 @@
     if (levels.length < 2) return W.setRoute({ name: 'tournament', tournamentId });
     const header = el('div', { class: 'card multi-head' }, [el('div', { class: 'card-hd' }, [el('div', {}, [el('div', { class: 'title' }, ['多级别同时开始']), el('div', { class: 'subtitle' }, ['三桌并行 · 每个级别固定 1 桌'])]), el('div', { class: 'actions' }, [el('button', { class: 'btn', onclick: () => W.setRoute({ name: 'tournament', tournamentId }) }, ['返回'])])])]);
     const gridClass = 'grid multi-grid' + (levels.length === 2 ? ' two-up' : '');
-    appRoot.appendChild(el('div', { class: 'grid multi-console' }, [header, el('div', { class: gridClass }, levels.map((lvl) => renderMiniLevelPanel(t.id, lvl.id)))]));
+    /*
+     * 先统一生成/收桌，再用同一份全局计划排桌并计算「下一组」。
+     * 面板只负责渲染：顺序固定为 levelIds 顺序，结果不依赖面板渲染时机，
+     * 从单级别详情页返回控制台后重新推导，仍然保持一致。
+     */
+    let active = false;
+    for (const lv of levels) {
+      lv.maxTables = Math.max(lv.maxTables, 1);
+      if (!lv.tables.length) lv.tables = [{ tableNo: 1, match: null, undo: [] }];
+      if (!lv.started || lv.finished) continue;
+      processEvents(W.generateMatchesIfNeeded(lv), lv);
+      // 多级别固定 1 桌：生成后强制收回多余桌子（比赛回到候场队列，
+      // 不删除对阵）；不能放在生成前，否则 adjustTablesToAutoCount 会按
+      // maxTables 再次扩桌。
+      W.safelyReduceTables(lv, 1);
+      active = true;
+    }
+    const views = active ? W.planMultiLevel(levels) : new Map();
+    if (active) W.saveState(); // C4: 生成后保存
+    const conflicts = W.crossLevelConflicts(levels);
+    appRoot.appendChild(el('div', { class: 'grid multi-console' }, [
+      header,
+      renderCrossLevelConflict(conflicts),
+      el('div', { class: gridClass }, levels.map((lvl) => renderMiniLevelPanel(t.id, lvl.id, views.get(lvl.id)))),
+    ]));
   }
 
-  function renderMiniLevelPanel(tournamentId, levelId) {
+  function renderMiniLevelPanel(tournamentId, levelId, view) {
     const { level } = W.getLevel(tournamentId, levelId); if (!level) return el('div', {}, []);
     level.maxTables = Math.max(level.maxTables, 1);
     if (!level.tables.length) level.tables = [{ tableNo: 1, match: null, undo: [] }];
-    if (level.started && !level.finished) {
-      processEvents(W.generateMatchesIfNeeded(level), level);
-    }
-    // 多级别固定 1 桌：生成后强制收回多余桌子（比赛回到候场队列，
-    // 不删除对阵）；不能放在生成前，否则 adjustTablesToAutoCount 会按
-    // maxTables 再次扩桌。
-    W.safelyReduceTables(level, 1);
-    if (level.started && !level.finished) {
-      W.fillTables(level);
-      // C4: 生成后保存
-      W.saveState();
-    }
     const alive = W.alivePlayers(level).length;
     const stateText = level.finished ? '已结束' : level.started ? '进行中' : '未开始';
     return el('div', { class: 'card mini-level-card', 'data-level-id': level.id, 'data-level-name': level.name }, [
@@ -390,11 +422,14 @@
         !level.started ? el('button', { class: 'btn ok block mini-start-btn', 'data-action': 'start-level', 'data-level-id': level.id, onclick: () => {
           // 多级别固定 1 桌；只约束本次开赛，level.maxTables 原值保留，
           // 切回单级别时仍按原设置恢复桌数。
-          processEvents(W.startLevel(level, { maxTables: 1 }), level);
+          // 开赛瞬间也可能与另一个正在进行的级别撞人，因此同样带上占用表。
+          const t = W.state.tournaments.find((x) => x.id === tournamentId);
+          const others = (t?.levels || []).filter((x) => x.id !== level.id);
+          processEvents(W.startLevel(level, { maxTables: 1, blocked: W.crossLevelBusyMap(others) }), level);
           W.saveState(); W.render();
         } }, ['开始比赛（1桌）']) : null,
         // 真实比赛桌已显示当前双方，控制台不再重复「当前对阵」，只保留下方下一组区域
-        renderMiniNextUp(level),
+        renderMiniNextUp(level, view),
       ]),
     ]);
   }
@@ -1071,22 +1106,33 @@
   function renderLevel(tournamentId, levelId) {
     const { tournament, level } = W.getLevel(tournamentId, levelId);
     if (!tournament || !level) return W.setRoute({ name: 'home' });
+    /*
+     * 同一赛事里还有别的级别正在进行时，单级别详情页也必须带上跨级别占用表，
+     * 不能因为换了一条渲染路径就绕过限制。
+     * 真正独立的单级别赛事没有其他进行中的级别，占用表为空，行为与原来一致；
+     * 不同赛事的级别永远不会被传进来。
+     */
+    const blocked = W.crossLevelBusyMap(
+      (tournament.levels || []).filter((l) => l.id !== level.id),
+    );
     if (level.started && !level.finished) {
       processEvents(W.generateMatchesIfNeeded(level), level);
-      W.fillTables(level);
+      W.fillTables(level, blocked);
       W.finalizeIfDone(level);
       // C4: 生成对阵后保存
       W.saveState();
     }
     const wrap = el('div', { class: 'grid' }, []);
-    wrap.appendChild(renderLevelHeader(tournamentId, tournament, level));
-    wrap.appendChild(renderLevelBody(tournamentId, tournament, level));
+    wrap.appendChild(renderLevelHeader(tournamentId, tournament, level, blocked));
+    const conflict = renderCrossLevelConflict(W.crossLevelConflicts(tournament.levels), level.id);
+    if (conflict) wrap.appendChild(conflict);
+    wrap.appendChild(renderLevelBody(tournamentId, tournament, level, blocked));
     // 比赛区按内容高度展开；页面剩余空白留在文档末尾，不再强行拉高选手卡。
     wrap.classList.add('level-page');
     appRoot.appendChild(wrap);
   }
 
-  function renderLevelHeader(tournamentId, tournament, level) {
+  function renderLevelHeader(tournamentId, tournament, level, blocked) {
     const alive = W.alivePlayers(level).length, total = Object.keys(level.players).length;
     const done = level.history.length, pending = level.pendingMatches.length + level.tables.filter((t) => t.match).length;
     const pct = Math.round((done / Math.max(1, done + pending)) * 100);
@@ -1113,7 +1159,7 @@
       el('div', { class: 'level-toolbar', role: 'toolbar', 'aria-label': '级别操作' }, [
         el('div', { class: 'level-toolbar-group' }, [
           !level.started
-            ? el('button', { class: 'btn primary', 'data-action': 'start-level', onclick: () => { processEvents(W.startLevel(level), level); W.saveState(); W.render(); } }, ['开始比赛'])
+            ? el('button', { class: 'btn primary', 'data-action': 'start-level', onclick: () => { processEvents(W.startLevel(level, { blocked }), level); W.saveState(); W.render(); } }, ['开始比赛'])
             : null,
           el('button', { class: 'btn', onclick: () => openPlayerListModal(level) }, ['选手列表']),
           el('button', { class: 'btn', 'data-action': 'situation', onclick: () => openSituation(tournamentId, level.id) }, ['赛情']),
@@ -1132,13 +1178,13 @@
     ])]);
   }
 
-  function renderLevelBody(tournamentId, tournament, level) {
+  function renderLevelBody(tournamentId, tournament, level, blocked) {
     // 已开始：比赛桌优先占据首屏；未开始：先录入选手。
     const tableCount = Math.min(3, Math.max(1, level.tables.length));
     const cls = 'level-layout ' + (level.started ? 'is-started' : 'is-waiting')
       + (level.tables.length >= 3 ? ' three-tables' : '')
       + ` tables-${tableCount}`;
-    const parts = level.started ? [renderArena(level), renderPlayerSidebar(level)] : [renderPlayerSidebar(level), renderArena(level)];
+    const parts = level.started ? [renderArena(level, blocked), renderPlayerSidebar(level)] : [renderPlayerSidebar(level), renderArena(level, blocked)];
     return el('div', { class: cls }, parts);
   }
 
@@ -1400,6 +1446,10 @@
   function matchupMeta(item) {
     if (!item) return '';
     if (item.source === 'grandFinal') return `总决赛 · 比分 ${item.wins1}:${item.wins2}`;
+    // 跨级别占用：明确告诉操作员在等谁、等哪个级别的比赛结束。
+    if (Array.isArray(item.crossBlocked) && item.crossBlocked.length) {
+      return item.crossBlocked.map((b) => `等待${b.name}完成${b.levelName}比赛`).join('、');
+    }
     const meta = [item.source === 'table' ? `桌子 #${item.tableNo}` : '候场队列', bracketLabel(item.bracket)];
     if (item.waiting) meta.push('等待当前比赛结束');
     return meta.join(' · ');
@@ -1418,10 +1468,12 @@
    * 三桌控制台专用：真实比赛桌已显示当前双方，这里只放一块独立的「下一组上场」。
    * 数据仍来自 W.getMatchupView(level)，赛程结算后随 W.render() 自动更新。
    */
-  function renderMiniNextUp(level) {
-    const view = W.getMatchupView(level);
-    const item = view.next;
-    const cls = 'mini-next' + (item ? '' : ' empty') + (item && item.waiting ? ' waiting' : '');
+  function renderMiniNextUp(level, view) {
+    // 多级别控制台传入全局计划算出的 view，保证预览与实际排桌同源。
+    const v = view || W.getMatchupView(level);
+    const item = v.next;
+    const cross = !!(item && item.crossBlocked && item.crossBlocked.length);
+    const cls = 'mini-next' + (item ? '' : ' empty') + (item && item.waiting ? ' waiting' : '') + (cross ? ' cross-wait' : '');
     return el('section', { class: cls, 'data-next-level-id': level.id }, [
       el('div', { class: 'mini-next-label' }, ['下一组上场']),
       item
@@ -1433,7 +1485,7 @@
           ]),
           el('div', { class: 'mini-next-meta' }, [matchupMeta(item)]),
         ])
-        : el('div', { class: 'mini-next-empty' }, [nextEmptyText(level, view)]),
+        : el('div', { class: 'mini-next-empty' }, [nextEmptyText(level, v)]),
     ]);
   }
 
@@ -1441,10 +1493,12 @@
    * 单级别页面只保留一条「下一组上场」。
    * 当前比赛已经完整显示在每张桌卡里，不再重复一块「当前对阵」占首屏。
    */
-  function renderNextUpBar(level) {
-    const view = W.getMatchupView(level);
+  function renderNextUpBar(level, blocked) {
+    // 单级别详情页：同一赛事还有其他进行中的级别时，blocked 非空。
+    const view = W.getMatchupView(level, blocked);
     const item = view.next;
-    const cls = 'next-up-bar' + (item ? '' : ' empty') + (item && item.waiting ? ' waiting' : '');
+    const cross = !!(item && item.crossBlocked && item.crossBlocked.length);
+    const cls = 'next-up-bar' + (item ? '' : ' empty') + (item && item.waiting ? ' waiting' : '') + (cross ? ' cross-wait' : '');
     return el('section', { class: cls, 'data-next-level-id': level.id, 'aria-label': '下一组上场', 'aria-live': 'polite' }, [
       el('span', { class: 'next-up-label' }, ['下一组上场']),
       item
@@ -1460,7 +1514,7 @@
     ]);
   }
 
-  function renderArena(level) {
+  function renderArena(level, blocked) {
     const tableCount = level.started ? W.computeTableCount(level) : level.maxTables;
     if (!level.tables.length) for (let i = 0; i < Math.min(tableCount, level.maxTables); i++) level.tables.push({ tableNo: i + 1, match: null, undo: [] });
     const busy = level.tables.filter((t) => t.match).length;
@@ -1477,7 +1531,7 @@
         ]),
         el('div', { class: 'card-bd arena-bd' }, [el('div', { class: gridClass }, level.tables.map((t) => renderTable(level, t.tableNo)))]),
       ]),
-      renderNextUpBar(level),
+      renderNextUpBar(level, blocked),
     ]);
   }
 

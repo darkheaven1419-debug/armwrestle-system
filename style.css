@@ -1592,6 +1592,13 @@ details[open] > .roster-summary { border-bottom-color: var(--line); }
 
 .mini-next.waiting .mini-next-name { color: var(--text-2); }
 
+/* 跨级别占用：等待其他级别比赛结束；旧数据冲突提示（只提示，不改比赛） */
+.mini-next.cross-wait .mini-next-meta { color: var(--danger); }
+.next-up-bar.cross-wait .next-up-meta { color: var(--danger); }
+.cross-conflict { border-color: var(--danger); background: var(--danger-dim); }
+.cross-conflict-row { align-items: center; gap: 8px; }
+.cross-conflict-title { color: var(--danger); }
+
 .mini-champion {
   display: flex;
   flex: 1 1 auto;
