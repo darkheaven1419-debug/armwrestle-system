@@ -482,6 +482,31 @@
     return 'waiting';
   }
 
+  /*
+   * 历史卡片有限，只保留「冠军/亚军/季军/第N名」文字，去掉奖牌图标。
+   * 名次仍然只来自 W.rankingLabel，不在这里另行计算。
+   */
+  function shortPlacement(label) {
+    return String(label || '').replace(/^[^一-鿿]+ */, '');
+  }
+
+  /*
+   * 每场比赛结束时的累计负场，严格按 history 的真实发生顺序累加。
+   * 历史卡片必须按“这场比赛发生时”的负场数判断淘汰，不能拿选手最终的
+   * losses/eliminated 反推——否则第一次失利的历史卡片也会被标成「淘汰」。
+   */
+  function lossCountByMatch(level) {
+    const out = new Map();
+    const running = new Map();
+    for (const h of level.history || []) {
+      if (!h || typeof h.loserId !== 'string' || !h.loserId) continue;
+      const n = (running.get(h.loserId) || 0) + 1;
+      running.set(h.loserId, n);
+      if (typeof h.id === 'string' && h.id) out.set(h.id, n);
+    }
+    return out;
+  }
+
   function sxEdgePath(x1, y1, x2, y2) {
     const dy = Math.abs(y2 - y1);
     if (dy < 1) return `M${x1},${y1} H${x2}`;
@@ -545,6 +570,7 @@
     const height = laneBottom + SX.pad;
 
     const matches = sxCollectMatches(safeLevel);
+    const lossAfter = lossCountByMatch(safeLevel);
     const byStage = new Map();
     for (const m of matches) {
       const key = `${m.bracket}:${m.stage}`;
@@ -570,6 +596,11 @@
       const placementLabel = rank && rank.status === 'decided'
         ? rank.label
         : (Number.isInteger(p.placement) ? W.rankingLabel(p.placement) : '');
+      // 只认“这场比赛结束时”的累计负场：第一次输球仍是「负」，
+      // 第二次输球的那一场才是「淘汰」。总决赛由名次单独展示。
+      const eliminatedHere = result === 'loss'
+        && typeof matchId === 'string'
+        && (lossAfter.get(matchId) || 0) >= 2;
       return {
         id: playerId,
         no: numbers.get(playerId) || null,
@@ -580,8 +611,10 @@
         result,
         current: isCurrent,
         eliminated: !!(p.eliminatedAt || p.losses >= 2),
+        eliminatedHere,
         placement: Number.isInteger(p.placement) ? p.placement : null,
         placementLabel: placementLabel || '',
+        placementShort: shortPlacement(placementLabel),
         x: 0, y: 0, w: 0, h: 0, cy: 0,
       };
     }
@@ -792,9 +825,12 @@
       const rank = rankById.get(id);
       let statusLabel = '赛前';
       if (gfIds.has(id)) {
-        statusLabel = gf && (gf.completed || gf.needsManual)
-          ? (gf.needsManual ? '总决赛未决' : '总决赛结束')
-          : '总决赛';
+        // 总决赛结束后直接显示实际最终名次（冠军/亚军），不再统一显示「总决赛结束」。
+        if (gf && gf.completed) {
+          statusLabel = rank && rank.status === 'decided' ? rank.label : '总决赛结束';
+        } else {
+          statusLabel = gf && gf.needsManual ? '总决赛未决' : '总决赛';
+        }
       } else if (p.eliminatedAt || p.losses >= 2) statusLabel = rank && rank.status === 'decided' ? `${rank.label} · 淘汰` : '已淘汰';
       else if (currentIds.has(id)) statusLabel = '当前比赛';
       else if (safeLevel.started) statusLabel = p.bracket === 'L' ? '败者组' : '胜者组';

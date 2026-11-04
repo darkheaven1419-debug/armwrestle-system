@@ -149,7 +149,14 @@ test('完赛后总决赛、冠军排名和淘汰标记保持一致', () => {
   assert.equal(layout.rank.rows[0].name, level.players[level.grandFinal.winnerId].name);
   assert.equal(layout.rank.rows[1].name, level.players[level.grandFinal.runnerUpId].name);
   assert.ok(layout.rank.rows.every((row) => row.status === 'decided'));
-  assert.ok(layout.entries.some((entry) => entry.statusLabel === '总决赛结束'));
+  assert.equal(
+    layout.entries.find((entry) => entry.id === level.grandFinal.winnerId).statusLabel,
+    '🥇 冠军',
+  );
+  assert.equal(
+    layout.entries.find((entry) => entry.id === level.grandFinal.runnerUpId).statusLabel,
+    '🥈 亚军',
+  );
   assert.ok(seats(layout).some((seat) => seat.eliminated));
   assert.ok(Number.isFinite(layout.gf.wins1) && Number.isFinite(layout.gf.wins2));
 });

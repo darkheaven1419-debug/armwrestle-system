@@ -635,7 +635,7 @@
     if (!seat) return 'sx-seat is-empty';
     return 'sx-seat'
       + (seat.current ? ' is-current' : '')
-      + (seat.eliminated ? ' is-out' : '')
+      + (seat.eliminatedHere ? ' is-out' : '')
       + (seat.result === 'win' ? ' is-win' : '')
       + (seat.result === 'loss' ? ' is-loss' : '')
       + (seat.result === 'live' ? ' is-live' : '');
@@ -644,8 +644,13 @@
   function sxSeatMeta(seat) {
     if (!seat) return '';
     if (seat.current) return '当前';
+    // 总决赛结束后直接显示实际名次（冠军/亚军），不按普通淘汰处理。
+    if (seat.bracket === 'GF' && seat.placementShort
+      && (seat.result === 'win' || seat.result === 'loss')) {
+      return seat.placementShort;
+    }
     if (seat.result === 'win') return '胜';
-    if (seat.result === 'loss') return seat.eliminated ? '淘汰' : '负';
+    if (seat.result === 'loss') return seat.eliminatedHere ? '淘汰' : '负';
     if (seat.result === 'live') return '进行';
     if (seat.result === 'waiting') return `${seat.losses}负`;
     return `${seat.losses}负`;
@@ -661,7 +666,7 @@
       `#${seat.no || '—'} ${seat.name}`,
       `${seat.losses} 负`,
       seat.placementLabel ? seat.placementLabel : '',
-      seat.eliminated ? '已淘汰' : '',
+      seat.eliminatedHere ? '已淘汰' : '',
     ].filter(Boolean).join(' · ');
     return el('div', {
       class: sxSeatClass(seat),
